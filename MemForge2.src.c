@@ -228,6 +228,12 @@ static inline CHAR16 *T(CHAR16 *ru, CHAR16 *en) { return g_lang ? en : ru; }
 static volatile UINT32 g_pass_idx_disp   = 0;
 static volatile UINT32 g_pass_total_disp = 1;
 
+/* Running total of errors found in tests COMPLETED so far this run.
+   Updated by the test driver right after each run_test_mc() returns.
+   Read by render_header() so user can see "are there errors yet" at a
+   glance without waiting for the summary. Reset to 0 at start of run. */
+static volatile UINT64 g_run_total_errors = 0;
+
 /* Total UNIQUE bytes of physical RAM actually exercised across the current
    run. Incremented at the start of each multipass pass by the size of that
    pass's buffer (the buffer is always a fresh (region, offset) slice).
@@ -943,14 +949,30 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
         }
     }
 
+    /* Cumulative error count across every test that has FINISHED so far this
+       run. Critical to surface in the header — user steps away for 10 min
+       and needs to know at a glance "did anything fail yet" without waiting
+       for the summary screen. Shown in every width tier so it never
+       disappears off narrow displays. The global g_run_total_errors is
+       updated by the test driver in the outer pass loop right after each
+       run_test_mc() returns. */
+    UINT64 errs_so_far = g_run_total_errors;
+    CHAR16 err_tag[40];
+    if (errs_so_far == 0) {
+        SPrint(err_tag, sizeof(err_tag), T(L"ош:0", L"err:0"));
+    } else {
+        /* Prepend ⚠ + uppercase to make non-zero count visually loud. */
+        SPrint(err_tag, sizeof(err_tag),
+               T(L"⚠ ОШИБОК:%ld", L"⚠ ERRORS:%ld"), errs_so_far);
+    }
+
     /* --------------- Row 0 ---------------
        Adaptive: drop fields when text grid is too narrow to hold them.
-       Wide (cols ≥ 110): full layout — RAM | PASS | elapsed | ETA | Tests
+       Wide (cols ≥ 110): full layout — RAM | PASS | err | elapsed | ETA | Tests
        Medium (90-109)  : drop "Tests N/M" tail
        Narrow (< 90)    : also drop "ETA ~mm:ss"
-       Very narrow(<70) : also drop "GB RAM" — just version + pass + time.
-       Without this, last fields silently get cut off the right edge on
-       low-res displays. */
+       Very narrow(<70) : also drop "GB RAM" — just version + pass + time + err.
+       Error tag stays in EVERY tier (top priority — user must see it). */
     UINTN row0 = 0;
     clear_row(row0);
     UINT64 ram_gb_x10 = (g_total_ram_mb * 10ULL + 512) / 1024ULL;
@@ -958,37 +980,46 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
                T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   ПРОХОД %d/%d   "
-                 L"|   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
+                 L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
                  L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   PASS %d/%d   "
-                 L"|   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
+                 L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               err_tag,
                secs / 60, secs % 60,
                eta_secs / 60, eta_secs % 60,
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   ПРОХОД %d/%d   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   PASS %d/%d   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   ПРОХОД %d/%d   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   PASS %d/%d   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               err_tag,
                secs / 60, secs % 60,
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4  |  %ld.%ld ГБ RAM  |  ПРОХОД %d/%d  |  %02d:%02d",
-                 L"  MEMFORGE v0.4  |  %ld.%ld GB RAM  |  PASS %d/%d  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4  |  %ld.%ld ГБ RAM  |  ПРОХОД %d/%d  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4  |  %ld.%ld GB RAM  |  PASS %d/%d  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4 | %d/%d | %02d:%02d",
-                 L" MEMFORGE v0.4 | %d/%d | %02d:%02d"),
+               T(L" MEMFORGE v0.4 | %d/%d | %s | %02d:%02d",
+                 L" MEMFORGE v0.4 | %d/%d | %s | %02d:%02d"),
                (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               err_tag,
                secs / 60, secs % 60);
     }
-    say_at_rc(0, row0, buf);
+    /* Use COL_FAIL for the whole row when errors > 0 so the warning is
+       impossible to miss from across the room. Otherwise default FG. */
+    {
+        UINT32 row_color = (errs_so_far > 0) ? COL_FAIL : COL_FG;
+        gfx_draw_str_color(0, row0 * g_char_h, buf, row_color);
+    }
 
     /* --------------- Row 1: live telemetry strip --------------- */
     clear_row(1);
@@ -3727,14 +3758,39 @@ static void spd_populate_dimms(void) {
         dimm_info_t *d = &g_dimms[dimm_idx];
         d->spd_addr = a;
         spd_parse_into_dimm(buf, got, d);
-        /* Diagnostic log line — show what we extracted. */
+        /* Diagnostic log line — show what we extracted. gnu-efi's SPrint
+           promotes UINT8 args to UINTN and `%02X` then prints the whole
+           promoted width (8 hex digits), producing garbage like
+           "0x00000050" instead of "0x50" and a 32-char serial blob.
+           Workaround: hand-format each byte into a small string buffer
+           and insert via %a. Result is exactly what you'd expect from
+           a standard printf. */
+        static const CHAR8 hex[] = "0123456789ABCDEF";
+        #define HX2(out, v) do { \
+            (out)[0] = hex[((v) >> 4) & 0xF]; \
+            (out)[1] = hex[(v) & 0xF]; \
+            (out)[2] = 0; \
+        } while (0)
+        CHAR8 s_addr[3], s_ser[9], s_year[3], s_week[3];
+        HX2(s_addr, a);
+        s_ser[0] = hex[(d->spd_serial[0] >> 4) & 0xF];
+        s_ser[1] = hex[ d->spd_serial[0]       & 0xF];
+        s_ser[2] = hex[(d->spd_serial[1] >> 4) & 0xF];
+        s_ser[3] = hex[ d->spd_serial[1]       & 0xF];
+        s_ser[4] = hex[(d->spd_serial[2] >> 4) & 0xF];
+        s_ser[5] = hex[ d->spd_serial[2]       & 0xF];
+        s_ser[6] = hex[(d->spd_serial[3] >> 4) & 0xF];
+        s_ser[7] = hex[ d->spd_serial[3]       & 0xF];
+        s_ser[8] = 0;
+        HX2(s_year, d->spd_mfg_year);
+        HX2(s_week, d->spd_mfg_week);
+        #undef HX2
         SPrint(lb, sizeof(lb),
-               L"[SPD] slot 0x%02X (DIMM%d): type=%d serial=%02X%02X%02X%02X mfg=20%02X/W%02X tAA=%d bytes=%ld",
-               a, dimm_idx,
+               L"[SPD] slot 0x%a (DIMM%d): type=%d serial=%a mfg=20%a/W%a tAA=%d bytes=%ld",
+               s_addr, dimm_idx,
                d->spd_size_class,
-               d->spd_serial[0], d->spd_serial[1],
-               d->spd_serial[2], d->spd_serial[3],
-               d->spd_mfg_year, d->spd_mfg_week,
+               s_ser,
+               s_year, s_week,
                d->spd_tCL, (UINT64)got);
         log_line(lb);
         dimm_idx++;
@@ -7504,6 +7560,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
            summary can report real coverage, not just the last buffer size. */
         g_run_tested_mb = 0;
         g_run_passes_done = 0;
+        g_run_total_errors = 0;
         /* Reset per-run live telemetry so it starts fresh on a re-run. */
         g_bw_bytes_prev = 0;
         g_bw_ts_prev_ms = 0;
@@ -7709,6 +7766,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                    (UINT32)i, r.errors);
             log_line(lb);
             g_summary[i] = r;
+            /* Bump cumulative error counter shown in the live header. */
+            g_run_total_errors += r.errors;
 
             g_cards[i].state = (r.status == 1) ? CARD_PASS : CARD_FAIL;
             g_cards[i].pct_x10 = 1000;

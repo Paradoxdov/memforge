@@ -3250,18 +3250,26 @@ static void detect_cpu_features(void) {
     if (g_has_thermal) {
         /* TjMax is the temperature threshold the digital sensor measures
            below — bits 23:16 of MSR_TEMPERATURE_TARGET. Typical 100°C
-           desktop / 105°C mobile. */
+           desktop / 105°C mobile. INTEL-ONLY MSR (0x1A2). */
         UINT64 tt = rdmsr_safe(MSR_TEMPERATURE_TARGET);
         g_tj_max = (UINT32)((tt >> 16) & 0xFF);
         if (g_tj_max == 0 || g_tj_max > 150) g_tj_max = 100;  /* sane fallback */
     }
     /* Base (max non-turbo) frequency from MSR_PLATFORM_INFO bits 15:8.
-       Multiplied by 100 MHz BCLK on Skylake+ Intel. AMD has same MSR but
-       different layout — for now this gives reasonable Intel-side numbers
-       and slightly off AMD values; both are still useful as relative. */
-    UINT64 pi = rdmsr_safe(MSR_PLATFORM_INFO);
-    UINT32 ratio = (UINT32)((pi >> 8) & 0xFF);
-    if (ratio > 0 && ratio < 100) g_base_freq_mhz = ratio * 100;
+       INTEL-ONLY MSR (0xCE). On AMD it does not exist — earlier (pre-fix)
+       code unconditionally read it and triggered #GP, freezing the tester
+       at init on every AMD platform. The frequency display tolerates
+       g_base_freq_mhz == 0 (ap_yield guards on `> 0`); AMD users just
+       won't see a calibrated MHz number in the core panel until we
+       implement AMD's MSRC001_0061 equivalent. */
+    if (g_cpu_vendor == CPU_INTEL) {
+        UINT64 pi = rdmsr_safe(MSR_PLATFORM_INFO);
+        UINT32 ratio = (UINT32)((pi >> 8) & 0xFF);
+        if (ratio > 0 && ratio < 100) g_base_freq_mhz = ratio * 100;
+    } else {
+        /* g_base_freq_mhz stays 0 → freq column shows '—'. */
+        log_line(L"[CPU] AMD: MSR_PLATFORM_INFO unavailable — base freq unknown");
+    }
 }
 
 /* ---------- RAPL detection (vendor-aware) ----------

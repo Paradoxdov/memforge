@@ -364,6 +364,11 @@ static UINT32 g_cfg_force_h        = 0;     /* >0 = pick GOP mode matching this 
 static UINT32 g_cfg_font_scale     = 0;     /* 0=auto (2× when h>1500), 1=force 1×, 2=force 2× */
 static UINT32 g_cfg_buffer_cap_mb = 1024;  /* per-allocation cap */
 static int    g_cfg_buffer_cap_explicit = 0;  /* user set BufferMB in INI? */
+/* Per-DIMM isolation: if non-zero, allocate the test buffer ONLY within
+   the physical address range of DIMM #N (1-based, matches SMBIOS Type 17
+   slot numbering). Lets the user verify each stick separately without
+   physically removing the others. Set via [Run] TestOnlyDimm=N. */
+static UINT32 g_cfg_test_only_dimm = 0;     /* 0 = all DIMMs (default) */
 /* Bit Fade is the slowest test by far — 2 × bitfade_s + overhead = 4-10
    min per pass at default settings. Running it on every pass of a 32-pass
    full test stacks to many hours. Default: run only on pass 1 (first
@@ -1149,23 +1154,150 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
 /* ---------- Memory ---------- */
 static UINTN g_mem_pages_global(void) { return g_mem_pages; }
 
+/* Look up the physical address range for a 1-based DIMM index using
+   SMBIOS Type 20 mapping. Returns 1 + fills *start/*end on success, 0
+   if the index is out of range or no Type 20 entries exist.
+
+   With interleaved memory (depth>1) a single DIMM's "range" covers a
+   non-contiguous set of cache lines, but the SMBIOS-reported start..end
+   range IS the SAME as for its interleave partners. We pick that range
+   and let multiple DIMMs share it — testing within the range exercises
+   the target DIMM but also touches its interleave peers. Not ideal but
+   the best we can do without chipset-specific bank-decoding hardware
+   knowledge. On non-interleaved systems (most workstations/servers)
+   each DIMM has its own exclusive range and isolation is perfect. */
+static int dimm_address_range(UINT32 dimm_index_1based,
+                               UINT64 *out_start, UINT64 *out_end) {
+    if (dimm_index_1based == 0 || dimm_index_1based > g_dimm_count) return 0;
+    UINT16 target_handle = g_dimms[dimm_index_1based - 1].handle;
+    for (UINT32 i = 0; i < g_dimm_map_count; i++) {
+        if (g_dimm_map[i].dev_handle == target_handle) {
+            *out_start = g_dimm_map[i].start;
+            *out_end   = g_dimm_map[i].end;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static EFI_STATUS alloc_test_buffer(void) {
     /* Strategy: 75% of largest contiguous EfiConventionalMemory block,
        capped at g_cfg_buffer_cap_mb (configurable via [Run] BufferMB in
-       quantai.ini, default 1024). Fall back to halving on alloc failure. */
-    UINTN free_pages   = get_largest_free_pages();
+       quantai.ini, default 1024). Fall back to halving on alloc failure.
+
+       When TestOnlyDimm=N is set, we additionally require the allocation
+       to fall WITHIN the physical address range of DIMM N (from SMBIOS
+       Type 20). UEFI's AllocateAddress flag lets us request a specific
+       physical address — we walk the DIMM's range looking for free
+       conventional memory chunks. */
+    UINT64 lo_bound = 0;
+    UINT64 hi_bound = (UINT64)-1;
+    int isolating = 0;
+    if (g_cfg_test_only_dimm > 0) {
+        if (dimm_address_range(g_cfg_test_only_dimm, &lo_bound, &hi_bound)) {
+            isolating = 1;
+            CHAR16 lb[180];
+            SPrint(lb, sizeof(lb),
+                   L"[ISOLATE] Test restricted to DIMM%d range 0x%lx..0x%lx",
+                   g_cfg_test_only_dimm, lo_bound, hi_bound);
+            log_line(lb);
+        } else {
+            CHAR16 lb[180];
+            SPrint(lb, sizeof(lb),
+                   L"[ISOLATE] TestOnlyDimm=%d but no SMBIOS Type 20 mapping found — falling back to full RAM",
+                   g_cfg_test_only_dimm);
+            log_line(lb);
+        }
+    }
+
     UINTN cap_pages    = ((UINTN)g_cfg_buffer_cap_mb * 1024ULL * 1024ULL) / 4096;
     UINTN min_pages    = (256ULL  * 1024 * 1024) / 4096;     /* 256 MB floor */
-    UINTN target_pages = (free_pages * 3) / 4;
+
+    /* Non-isolated default path — pick largest free block. */
+    if (!isolating) {
+        UINTN free_pages = get_largest_free_pages();
+        UINTN target_pages = (free_pages * 3) / 4;
+        if (target_pages > cap_pages) target_pages = cap_pages;
+        if (target_pages < min_pages) target_pages = min_pages;
+        while (target_pages >= min_pages / 4) {
+            EFI_PHYSICAL_ADDRESS addr = 0;
+            EFI_STATUS s = uefi_call_wrapper(BS->AllocatePages, 4,
+                                  AllocateAnyPages, EfiLoaderData, target_pages, &addr);
+            if (s == EFI_SUCCESS) {
+                g_mem_addr = addr;
+                g_mem_pages = target_pages;
+                return s;
+            }
+            target_pages /= 2;
+        }
+        return EFI_OUT_OF_RESOURCES;
+    }
+
+    /* Isolated path — request specific address within the DIMM's range.
+       Walk EFI memory map, find conventional regions overlapping our
+       target DIMM, attempt allocations at successively smaller sizes. */
+    UINTN map_size = 0, map_key = 0, desc_size = 0;
+    UINT32 desc_ver = 0;
+    EFI_MEMORY_DESCRIPTOR *map = NULL;
+    uefi_call_wrapper(BS->GetMemoryMap, 5, &map_size, map, &map_key, &desc_size, &desc_ver);
+    map_size += desc_size * 16;
+    uefi_call_wrapper(BS->AllocatePool, 3, EfiLoaderData, map_size, (VOID**)&map);
+    if (!map) return EFI_OUT_OF_RESOURCES;
+    EFI_STATUS gms = uefi_call_wrapper(BS->GetMemoryMap, 5,
+                          &map_size, map, &map_key, &desc_size, &desc_ver);
+    if (EFI_ERROR(gms)) {
+        uefi_call_wrapper(BS->FreePool, 1, map);
+        return gms;
+    }
+    UINTN entries = map_size / desc_size;
+    /* Find largest conventional region that overlaps the DIMM range. */
+    UINT64 best_start = 0;
+    UINTN  best_pages = 0;
+    for (UINTN i = 0; i < entries; i++) {
+        EFI_MEMORY_DESCRIPTOR *d = (EFI_MEMORY_DESCRIPTOR *)
+            ((UINT8 *)map + i * desc_size);
+        if (d->Type != EfiConventionalMemory) continue;
+        UINT64 r_start = d->PhysicalStart;
+        UINT64 r_end   = r_start + d->NumberOfPages * 4096ULL - 1;
+        /* Clip to DIMM range. */
+        if (r_end   < lo_bound) continue;
+        if (r_start > hi_bound) continue;
+        UINT64 cs = (r_start < lo_bound) ? lo_bound : r_start;
+        UINT64 ce = (r_end   > hi_bound) ? hi_bound : r_end;
+        if (ce <= cs) continue;
+        UINTN avail_pages = (UINTN)((ce - cs + 1) / 4096);
+        /* Reserve a small headroom to avoid colliding with stuff EFI keeps
+           live during runtime. */
+        if (avail_pages < min_pages / 4) continue;
+        if (avail_pages > best_pages) {
+            best_pages = avail_pages;
+            best_start = (cs + 4095) & ~0xFFFULL;   /* page-align up */
+        }
+    }
+    uefi_call_wrapper(BS->FreePool, 1, map);
+
+    if (best_pages == 0) {
+        log_line(L"[ISOLATE] No conventional memory found inside DIMM range");
+        return EFI_NOT_FOUND;
+    }
+
+    UINTN target_pages = (best_pages * 3) / 4;
     if (target_pages > cap_pages) target_pages = cap_pages;
     if (target_pages < min_pages) target_pages = min_pages;
+    /* AllocateAddress requires page-aligned address. */
     while (target_pages >= min_pages / 4) {
-        EFI_PHYSICAL_ADDRESS addr = 0;
+        EFI_PHYSICAL_ADDRESS addr = best_start;
         EFI_STATUS s = uefi_call_wrapper(BS->AllocatePages, 4,
-                              AllocateAnyPages, EfiLoaderData, target_pages, &addr);
+                              AllocateAddress, EfiLoaderData, target_pages, &addr);
         if (s == EFI_SUCCESS) {
             g_mem_addr = addr;
             g_mem_pages = target_pages;
+            CHAR16 lb[160];
+            SPrint(lb, sizeof(lb),
+                   L"[ISOLATE] Allocated %ld MB at 0x%lx (inside DIMM%d)",
+                   (UINT64)(target_pages * 4096ULL / 1024ULL / 1024ULL),
+                   (UINT64)addr, g_cfg_test_only_dimm);
+            log_line(lb);
             return s;
         }
         target_pages /= 2;
@@ -4441,6 +4573,12 @@ static void parse_quantai_ini(void) {
             else if (ini_strieq(key, "BitFadeSeconds") && ini_parse_uint(val, &v)) {
                 g_cfg_bitfade_s = v;
                 g_cfg_bitfade_explicit = 1;  /* user chose this — don't auto-tune later */
+            }
+            else if (ini_strieq(key, "TestOnlyDimm") && ini_parse_uint(val, &v)) {
+                /* 1-based DIMM index. We cross-reference with SMBIOS Type 20
+                   address-range map at alloc time to restrict the test
+                   buffer to that DIMM's physical range. 0 = test all. */
+                g_cfg_test_only_dimm = v;
             }
             else if (ini_strieq(key, "BitFadeEveryPass") && ini_parse_uint(val, &v)) {
                 g_cfg_bitfade_every_pass = (int)v;
@@ -7772,6 +7910,16 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 
     /* Build inventory of testable regions for multi-pass mode. */
     scan_mem_regions();
+
+    /* When isolating a single DIMM, multipass would rotate the buffer
+       across regions in OTHER DIMMs — defeating the isolation. Force
+       MultiPass=0 and Passes=1 in this mode so we hammer just the one
+       allocation inside the target DIMM's range. */
+    if (g_cfg_test_only_dimm > 0 && g_cfg_multipass) {
+        log_line(L"[ISOLATE] TestOnlyDimm set — forcing MultiPass=0, Passes=1");
+        g_cfg_multipass = 0;
+        g_cfg_passes    = 1;
+    }
 
     EFI_STATUS s = alloc_test_buffer();
     if (EFI_ERROR(s)) {

@@ -4753,6 +4753,58 @@ static int is_ddr5_system(void) {
      128-511 GB: 4096 MB chunks (Threadripper Pro, mid-server)
      ≥ 512 GB:   8192 MB chunks (high-end Xeon Platinum / Epyc)
    Skipped if user explicitly set BufferMB in quantai.ini. */
+/* Per-DIMM "XMP active" flag set by xmp_warn_check(). Read by main menu
+   render to show a warning, and by report.json to surface in output. */
+static UINT8  g_xmp_dimm_flagged[MAX_DIMMS] = {0};
+static int    g_xmp_any_flagged = 0;
+
+/* Detect XMP / EXPO / AMP active by comparing configured DRAM speed
+   against the JEDEC max for the generation. If a DIMM is running ABOVE
+   its JEDEC-standard top speed, BIOS has loaded an overclock profile
+   from SPD. That profile may be unstable even though the chip ITSELF
+   tested clean — exactly the "RAM passes test but Windows BSODs"
+   pattern the shop sees most often.
+
+   JEDEC standard top speeds (per JEDEC DDR specs as of 2023):
+     DDR3:   2133 MT/s   (anything above = OC)
+     DDR4:   3200 MT/s   (above = XMP / AMP / DOCP profile)
+     DDR5:   6400 MT/s   (above = XMP 3.0 / EXPO profile)
+   Below threshold = could be either rated JEDEC or BIOS-downclocked,
+   doesn't trigger the warning (no OC risk). */
+static void xmp_warn_check(void) {
+    g_xmp_any_flagged = 0;
+    for (UINT32 i = 0; i < g_dimm_count && i < MAX_DIMMS; i++) {
+        dimm_info_t *d = &g_dimms[i];
+        UINT32 speed = d->configured_speed_mt
+                     ? d->configured_speed_mt : d->speed_mt;
+        if (speed == 0) continue;
+        UINT32 jedec_max = 0;
+        switch (d->ddr_type) {
+            case 0x18: jedec_max = 2133; break;  /* DDR3 */
+            case 0x1A: jedec_max = 3200; break;  /* DDR4 */
+            case 0x22: jedec_max = 6400; break;  /* DDR5 */
+            default:                              break;
+        }
+        if (jedec_max == 0) continue;
+        if (speed > jedec_max) {
+            g_xmp_dimm_flagged[i] = 1;
+            g_xmp_any_flagged = 1;
+            CHAR16 lb[200];
+            SPrint(lb, sizeof(lb),
+                   L"[XMP] %a (DIMM%d): %d MT/s exceeds JEDEC %s max %d MT/s — "
+                   L"XMP/EXPO/AMP profile is active",
+                   d->locator, i + 1, speed,
+                   ddr_type_name(d->ddr_type), jedec_max);
+            log_line(lb);
+        }
+    }
+    if (g_xmp_any_flagged) {
+        log_line(L"[XMP] WARNING: BSOD-grade memory errors in Windows may be due "
+                 L"to an unstable overclock, not a defective stick. Disable XMP "
+                 L"in BIOS and retest to confirm.");
+    }
+}
+
 static void apply_ram_size_tuning(void) {
     if (g_cfg_buffer_cap_explicit) return;
     UINT64 ram_gb = g_total_ram_mb / 1024;
@@ -6704,6 +6756,8 @@ static void write_json_report(UINT64 total_ms) {
         SPrint(buf, sizeof(buf),
             L"%a\r\n      {\"slot\":\"%a\",\"size_mb\":%d,\"manufacturer\":\"%a\","
             L"\"part\":\"%a\",\"type\":\"%s\",\"speed_mt\":%d,\"configured_speed_mt\":%d,"
+            L"\"xmp_active\":%a,"
+            L"\"organization\":{\"device_width\":%d,\"bus_width\":%d,\"ranks\":%d},"
             L"\"spd\":{\"present\":%a,\"smbus_addr\":\"0x%02X\","
             L"\"serial\":\"%02X%02X%02X%02X\",\"mfg_year\":\"20%02X\",\"mfg_week\":%d,"
             L"\"jedec_bank\":%d,\"jedec_code\":\"0x%02X\",\"tAA\":%d}}",
@@ -6711,6 +6765,8 @@ static void write_json_report(UINT64 total_ms) {
             d->locator, d->size_mb, d->manufacturer, d->part_number,
             d->ddr_type ? ddr_type_name(d->ddr_type) : L"?",
             d->speed_mt, d->configured_speed_mt,
+            (i < MAX_DIMMS && g_xmp_dimm_flagged[i]) ? "true" : "false",
+            d->spd_device_width, d->spd_bus_width, d->spd_ranks,
             d->spd_present ? "true" : "false",
             d->spd_addr,
             d->spd_serial[0], d->spd_serial[1],
@@ -7363,6 +7419,7 @@ static void render_main_menu(void) {
     if (!ultra)           cov_body_rows++;   /* per-pass estimate row */
     if (!g_cfg_multipass) cov_body_rows++;
     if (g_is_ddr5)        cov_body_rows++;
+    if (g_xmp_any_flagged) cov_body_rows++;  /* XMP warning line */
     UINTN cov_h = hw_title_h + cov_body_rows * line_h + pad;
     menu_panel(px, y, pw, cov_h, T(L"ПОКРЫТИЕ", L"COVERAGE"), COL_OK);
 
@@ -7409,6 +7466,18 @@ static void render_main_menu(void) {
             T(L"  → Чтобы покрыть всю RAM: в quantai.ini поставь MultiPass=1, Passes=0",
               L"  → For full RAM coverage: set MultiPass=1, Passes=0 in quantai.ini"),
             COL_RUN);
+        cy += line_h;
+    }
+
+    /* XMP/EXPO warning — appears only when at least one DIMM is running
+       above its JEDEC max speed. Visible in red on the main menu so the
+       user sees it BEFORE starting tests. */
+    if (g_xmp_any_flagged) {
+        gfx_draw_str_color(cx, cy,
+            T(L"  ⚠ XMP/EXPO активен — нестабильный OC возможная причина BSOD; отключи в BIOS если жалобы",
+              L"  ⚠ XMP/EXPO active — unstable OC may cause BSODs; disable in BIOS to verify"),
+            COL_FAIL);
+        cy += line_h;
     }
 
     y += cov_h + pad;
@@ -7958,6 +8027,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     /* SMBIOS knows the DRAM generation — apply DDR5-specific test tuning
        (Bit Fade longer, Row Hammer 2x stronger) before the menu/tests run. */
     apply_ddr_tuning();
+    /* Warn user if XMP/EXPO is active. Common cause of "RAM tested clean
+       but Windows BSODs" — unstable overclock profile. */
+    xmp_warn_check();
     /* RAPL probe — once SMBIOS is up, MSR_RAPL_POWER_UNIT (0x606) tells us
        whether the package energy counter is meaningful. Failures are silent;
        g_pkg_power_w simply stays 0 and the header omits the watts cell. */

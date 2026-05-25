@@ -6,6 +6,16 @@ captures hardware ECC events via MCA registers, snapshots environmental
 context at every error, and writes a structured report to the USB stick for
 offline review.
 
+![Memory failure detected — DDR3 stuck-bit + damaged bank, pinpointed to Samsung DIMM1](docs/screenshot-failure.jpg)
+
+*Real run on a returned-to-shop HP EliteDesk 8300: 396 errors in 54 seconds,
+pinpointed to **DIMM1, chip U3 bit 4 stuck** plus a damaged bank-group 3 /
+bank 5. SPD readout identified the part as Samsung M378B5773CH0-CK0 for
+warranty replacement. The simple verdict screen (shown above) is the
+default after every run; press **[D]** for the technical breakdown — full
+14-test table, per-error address/DIMM/DRAM-coord records, MCA bank diff,
+SPD timings, and BW degradation trend.*
+
 ## What it actually does
 
 - 14 memory tests covering pattern faults, retention, row hammering, address

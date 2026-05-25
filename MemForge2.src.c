@@ -7177,6 +7177,53 @@ static const abt_line_t g_about_lines[] = {
 };
 #define ABOUT_LINE_COUNT (sizeof(g_about_lines) / sizeof(g_about_lines[0]))
 
+/* ---------- Periodic-wake key wait ----------
+   Wait for either a keystroke or a short timer tick. Returns 1 if a key
+   was successfully read into *out_key, 0 if it was a timer tick (no key)
+   or a spurious wake.
+
+   Why we don't just block on ConIn->WaitForKey:
+     Some old HP business EFI firmwares (e.g. Z2 G8, EliteDesk 800 series)
+     deactivate USB-keyboard polling after the WaitForEvent has been
+     blocked for ~10 s — the USB stack assumes nobody's waiting and stops
+     servicing the device. After that, ESC / any key never gets delivered
+     and the user has to power-cycle to exit a summary screen.
+   Periodic short waits (timeout_ms = 200) force firmware to re-enter
+   WaitForEvent often enough that the USB stack keeps polling. The caller
+   gets a 0 return when nothing happened and just loops again — totally
+   harmless on firmwares that don't need it. */
+static int wait_key_or_timer(EFI_INPUT_KEY *out_key, UINT64 timeout_ms) {
+    if (out_key) { out_key->ScanCode = 0; out_key->UnicodeChar = 0; }
+    EFI_EVENT te = NULL;
+    EFI_STATUS cs = uefi_call_wrapper(BS->CreateEvent, 5,
+                                       EVT_TIMER, 0, NULL, NULL, &te);
+    if (cs != EFI_SUCCESS || !te) {
+        /* Fallback: blocking key wait (old behaviour). Safer than aborting. */
+        UINTN idx = 0;
+        uefi_call_wrapper(BS->WaitForEvent, 3, 1,
+                          &ST->ConIn->WaitForKey, &idx);
+        EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
+                                           ST->ConIn, out_key);
+        return (rs == EFI_SUCCESS) ? 1 : 0;
+    }
+    /* SetTimer wants 100-ns units. 10000 = 1 ms. Floor at 50 ms so we
+       don't burn CPU on a hyperactive timer. */
+    if (timeout_ms < 50) timeout_ms = 50;
+    uefi_call_wrapper(BS->SetTimer, 3, te, TimerRelative,
+                      (UINT64)timeout_ms * 10000ULL);
+    EFI_EVENT events[2] = { te, ST->ConIn->WaitForKey };
+    UINTN idx = 0;
+    uefi_call_wrapper(BS->WaitForEvent, 3, 2, events, &idx);
+    /* CloseEvent implicitly cancels any pending timer on this event. */
+    uefi_call_wrapper(BS->CloseEvent, 1, te);
+    if (idx == 1) {
+        EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
+                                           ST->ConIn, out_key);
+        return (rs == EFI_SUCCESS) ? 1 : 0;
+    }
+    return 0;  /* timer tick — caller loops */
+}
+
 static void render_about_page(UINTN page, UINTN total_pages,
                                 UINTN lines_per_page) {
     cls();
@@ -7249,17 +7296,14 @@ static void render_about_screen(void) {
     UINTN page = 0;
     for (;;) {
         render_about_page(page, total_pages, lines_per_page);
-        /* Wait for a key. */
+        /* Wait for a key. Use periodic-wake helper so HP USB stack stays
+           alive even if user leaves us sitting here. No idle timeout —
+           About is informational; user dismisses at their pace. */
         drain_conin();
         EFI_INPUT_KEY k = {0, 0};
-        UINTN idx = 0;
         for (;;) {
-            uefi_call_wrapper(BS->WaitForEvent, 3, 1,
-                              &ST->ConIn->WaitForKey, &idx);
-            EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
-                                               ST->ConIn, &k);
-            if (rs == EFI_SUCCESS) break;
-            uefi_call_wrapper(BS->Stall, 1, (UINTN)50000);
+            if (wait_key_or_timer(&k, 200)) break;
+            /* Timer tick — just loop and wait again. */
         }
         /* Navigation: PgDn / Space / Enter → next page (or exit if last).
            PgUp / Backspace → prev page (or stay on first).
@@ -7296,12 +7340,8 @@ static void about_wait_any_key(void) {
     drain_conin();
     for (;;) {
         EFI_INPUT_KEY k = {0, 0};
-        UINTN idx = 0;
-        uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, &idx);
-        EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
-                                           ST->ConIn, &k);
-        if (rs == EFI_SUCCESS) return;
-        uefi_call_wrapper(BS->Stall, 1, (UINTN)50000);
+        if (wait_key_or_timer(&k, 200)) return;
+        /* Timer tick — keep USB polling alive on HP firmwares. */
     }
 }
 
@@ -7723,13 +7763,12 @@ static int main_menu_wait(void) {
         }
 
         EFI_INPUT_KEY k = { 0, 0 };
-        UINTN idx = 0;
-        uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, &idx);
-        EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &k);
-        if (rs != EFI_SUCCESS) {
-            /* Spurious wake — k is garbage. Sleep briefly so we don't spin. */
-            uefi_call_wrapper(BS->Stall, 1, (UINTN)50000);
-            continue;
+        /* Periodic-wake variant: 200 ms timer ticks keep the EFI USB stack
+           alive on old HP business firmwares that otherwise stop polling
+           the keyboard during long blocking WaitForEvent calls. Spurious /
+           timer wakes just loop back to wait again — no harm done. */
+        if (!wait_key_or_timer(&k, 200)) {
+            continue;   /* timer tick or spurious wake */
         }
 
         /* [1] / ENTER / SPACE → Full test (recommended).
@@ -8550,16 +8589,27 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         log_line(L"[STEP 7] Awaiting post-summary action");
         drain_conin();
         int leave_summary = 0;
+        /* Idle timeout: if the operator walked away and nobody pressed a
+           key for 10 min, auto-reboot. The summary is still on screen, the
+           log + report.json are already on USB, so nothing is lost.
+           This is also a safety net for the HP keyboard-hang scenario:
+           even if USB never comes back, the machine will at least cycle
+           rather than sit forever on a frozen screen. */
+        const UINT64 IDLE_REBOOT_MS = 10ULL * 60ULL * 1000ULL;   /* 10 min */
+        UINT64 idle_ms = 0;
         while (!leave_summary) {
             EFI_INPUT_KEY k = { 0, 0 };
-            UINTN idx = 0;
-            uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, &idx);
-            EFI_STATUS rs = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &k);
-            if (rs != EFI_SUCCESS) {
-                /* Spurious wake — don't act on garbage k. */
-                uefi_call_wrapper(BS->Stall, 1, (UINTN)50000);
-                continue;
+            int got = wait_key_or_timer(&k, 200);
+            if (!got) {
+                idle_ms += 200;
+                if (idle_ms >= IDLE_REBOOT_MS) {
+                    log_line(L"[STEP 7] Idle timeout — auto-reboot");
+                    reboot_requested = 1;
+                    leave_summary = 1;
+                }
+                continue;   /* timer tick — loop and keep USB polling alive */
             }
+            idle_ms = 0;    /* any successful key read resets the idle clock */
             if (k.ScanCode == SCAN_ESC) {
                 reboot_requested = 1;
                 leave_summary = 1;

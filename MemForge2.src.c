@@ -273,6 +273,23 @@ static UINT32 g_bw_mbps_current = 0;    /* MB/s (×1) — display: divide by 102
 static UINT32 g_bw_mbps_peak    = 0;    /* highest sampled MB/s during this run */
 static UINT64 g_bw_peak_theoretical_mbps = 0; /* derived from DDR speed × bus width */
 
+/* Bandwidth history ring — 1-minute time buckets, up to 1024 buckets
+   (~17 h). Lets the summary report a trend: is the system sustaining the
+   bandwidth it had at minute 0, or has BW silently dropped 8 % by hour 4?
+   A persistent drop is a strong signal of thermal-induced refresh-rate
+   bumps, IMC throttling, or a marginally-failing channel.
+
+   Per-bucket fields: max BW (we take the bucket maximum, not mean, so
+   short BW dips between tests don't bias the trend) plus sample count.
+   New samples within the same bucket update max; bucket roll-over starts
+   a fresh max. */
+#define BW_HISTORY_BUCKETS 1024
+#define BW_BUCKET_MS       60000ULL    /* 1 minute per bucket */
+static UINT32 g_bw_history_max[BW_HISTORY_BUCKETS];
+static UINT32 g_bw_history_count = 0;       /* total buckets used (≤ BW_HISTORY_BUCKETS) */
+static UINT64 g_bw_history_start_ms = 0;    /* run-start timestamp for bucket indexing */
+static UINT32 g_bw_current_bucket = 0xFFFFFFFFu;   /* index currently being filled */
+
 /* CPU vendor (CPUID leaf 0 EBX/EDX/ECX returns "GenuineIntel"/"AuthenticAMD"
    etc.). Used to: (1) pick the right RAPL MSR pair, (2) skip Intel-only
    thermal MSR readout on AMD, (3) decide which platform-specific quirks
@@ -387,6 +404,13 @@ static int    g_cfg_buffer_cap_explicit = 0;  /* user set BufferMB in INI? */
    slot numbering). Lets the user verify each stick separately without
    physically removing the others. Set via [Run] TestOnlyDimm=N. */
 static UINT32 g_cfg_test_only_dimm = 0;     /* 0 = all DIMMs (default) */
+/* Marathon mode: keep cycling the full test for N hours total. Useful for
+   shop-overnight runs and intermittent-failure hunting (errors that only
+   surface after 2-4 h of sustained load). 0 = disabled (normal behaviour),
+   1..24 = run until total elapsed time hits N hours OR user aborts.
+   When enabled, MultiPass iterator wraps when exhausted (we re-cover the
+   whole RAM range again) and the pass counter keeps incrementing. */
+static UINT32 g_cfg_marathon_hours = 0;
 /* Bit Fade is the slowest test by far — 2 × bitfade_s + overhead = 4-10
    min per pass at default settings. Running it on every pass of a 32-pass
    full test stacks to many hours. Default: run only on pass 1 (first
@@ -1027,7 +1051,14 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
        (Bit Fade is 100× longer than AVX2). Pass-grain work is the right
        unit. We clamp the result to a reasonable range. */
     UINT32 eta_secs = 0;
-    if (g_pass_total_disp > 0 && elapsed_ms > 5000) {
+    if (g_cfg_marathon_hours > 0) {
+        /* Marathon mode: ETA = wall-clock time remaining to the hour limit.
+           Pass-grain extrapolation makes no sense when "total passes" is a
+           sentinel — the user only cares about hours left. */
+        UINT64 limit_ms = (UINT64)g_cfg_marathon_hours * 3600ULL * 1000ULL;
+        if (limit_ms > elapsed_ms)
+            eta_secs = (UINT32)((limit_ms - elapsed_ms) / 1000);
+    } else if (g_pass_total_disp > 0 && elapsed_ms > 5000) {
         UINT64 done_units = (UINT64)(g_pass_idx_disp > 0 ? g_pass_idx_disp - 1 : 0) * total
                           + (UINT64)done;
         UINT64 total_units = (UINT64)g_pass_total_disp * total;
@@ -1055,6 +1086,28 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                T(L"⚠ ОШИБОК:%ld", L"⚠ ERRORS:%ld"), errs_so_far);
     }
 
+    /* Pass-field tag. Normal: "ПРОХОД 3/12". Marathon: "МАРАФОН 2:15/8h"
+       (pass-2, 2 h 15 min elapsed of an 8 h target). Marathon uses elapsed
+       wall-clock not pass count because the user cares about "how much
+       longer", not arbitrary pass-index numbers. */
+    CHAR16 pass_tag[48];
+    if (g_cfg_marathon_hours > 0) {
+        UINT32 elapsed_min = secs / 60;
+        UINT32 limit_min   = g_cfg_marathon_hours * 60;
+        UINT32 remain_min  = (limit_min > elapsed_min) ? (limit_min - elapsed_min) : 0;
+        SPrint(pass_tag, sizeof(pass_tag),
+               T(L"МАРАФОН п%d  %d:%02d/%dч  ост %d:%02d",
+                 L"MARATHON p%d  %d:%02d/%dh  rem %d:%02d"),
+               (UINT32)g_pass_idx_disp,
+               elapsed_min / 60, elapsed_min % 60,
+               g_cfg_marathon_hours,
+               remain_min / 60, remain_min % 60);
+    } else {
+        SPrint(pass_tag, sizeof(pass_tag),
+               T(L"ПРОХОД %d/%d", L"PASS %d/%d"),
+               (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp);
+    }
+
     /* --------------- Row 0 ---------------
        Adaptive: drop fields when text grid is too narrow to hold them.
        Wide (cols ≥ 110): full layout — RAM | PASS | err | elapsed | ETA | Tests
@@ -1068,38 +1121,38 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   ПРОХОД %d/%d   "
+               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   PASS %d/%d   "
+                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
-               (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               pass_tag,
                err_tag,
                secs / 60, secs % 60,
                eta_secs / 60, eta_secs % 60,
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   ПРОХОД %d/%d   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   PASS %d/%d   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
-               (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               pass_tag,
                err_tag,
                secs / 60, secs % 60,
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4  |  %ld.%ld ГБ RAM  |  ПРОХОД %d/%d  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4  |  %ld.%ld GB RAM  |  PASS %d/%d  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
-               (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4 | %d/%d | %s | %02d:%02d",
-                 L" MEMFORGE v0.4 | %d/%d | %s | %02d:%02d"),
-               (UINT32)g_pass_idx_disp, (UINT32)g_pass_total_disp,
+               T(L" MEMFORGE v0.4 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4 | %s | %s | %02d:%02d"),
+               pass_tag,
                err_tag,
                secs / 60, secs % 60);
     }
@@ -3865,6 +3918,75 @@ static void mca_report_diff(void) {
     }
 }
 
+/* ---------- Bandwidth degradation trend ----------
+   Analyses the 1-min bucketed BW history collected during the run.
+   Compares the FIRST quartile of buckets against the LAST quartile.
+   A sustained drop > 5 % is reported as a yellow trend; > 15 % is
+   reported as a red trend (likely thermal throttling, IMC retry
+   storms, or a marginally-failing channel slowing the controller).
+
+   We need at least 8 buckets (~8 min of runtime) to make any claim
+   — shorter runs the trend is noise and we just log "n/a".
+
+   Implementation note: results are exposed via the two globals
+   g_bw_trend_first_pct / g_bw_trend_last_pct (relative to overall
+   peak ×100) so render_summary and JSON can pick them up without
+   recomputing. */
+static UINT32 g_bw_trend_first_pct = 0;     /* first-quartile mean / peak * 100 */
+static UINT32 g_bw_trend_last_pct  = 0;     /* last-quartile mean / peak * 100 */
+static int    g_bw_trend_degraded  = 0;     /* 0 = ok, 1 = mild, 2 = severe */
+
+static void bw_trend_report(void) {
+    if (g_bw_history_count < 8) {
+        log_line(L"[BWTREND] run too short (<8 min) — no trend analysis");
+        return;
+    }
+    UINT32 q = g_bw_history_count / 4;
+    if (q < 2) q = 2;
+    UINT64 first_sum = 0, last_sum = 0;
+    UINT32 peak = 0;
+    for (UINT32 i = 0; i < q; i++) first_sum += g_bw_history_max[i];
+    for (UINT32 i = g_bw_history_count - q; i < g_bw_history_count; i++)
+        last_sum += g_bw_history_max[i];
+    for (UINT32 i = 0; i < g_bw_history_count; i++)
+        if (g_bw_history_max[i] > peak) peak = g_bw_history_max[i];
+    if (peak == 0) return;
+
+    UINT32 first_mean = (UINT32)(first_sum / q);
+    UINT32 last_mean  = (UINT32)(last_sum  / q);
+    g_bw_trend_first_pct = (UINT32)((UINT64)first_mean * 100ULL / peak);
+    g_bw_trend_last_pct  = (UINT32)((UINT64)last_mean  * 100ULL / peak);
+
+    /* Drop = (first - last) / first * 100, clamped at 0. */
+    UINT32 drop_pct = 0;
+    if (first_mean > last_mean) {
+        drop_pct = (UINT32)(((UINT64)(first_mean - last_mean) * 100ULL) / first_mean);
+    }
+    const CHAR16 *verdict;
+    if (drop_pct >= 15)      { g_bw_trend_degraded = 2; verdict = L"SEVERE drop"; }
+    else if (drop_pct >=  5) { g_bw_trend_degraded = 1; verdict = L"mild drop"; }
+    else                     { g_bw_trend_degraded = 0; verdict = L"stable"; }
+
+    CHAR16 lb[220];
+    SPrint(lb, sizeof(lb),
+           L"[BWTREND] %d buckets (1-min) collected, peak %d MB/s, "
+           L"first-quartile mean %d MB/s (%d%% of peak), "
+           L"last-quartile mean %d MB/s (%d%% of peak) -> %s",
+           g_bw_history_count, peak,
+           first_mean, g_bw_trend_first_pct,
+           last_mean,  g_bw_trend_last_pct,
+           verdict);
+    log_line(lb);
+    if (g_bw_trend_degraded >= 1) {
+        SPrint(lb, sizeof(lb),
+               L"[BWTREND] WARNING: %d%% bandwidth drop over the run — "
+               L"check thermal throttling, IMC retry counters, or a "
+               L"marginal channel slowing the controller",
+               drop_pct);
+        log_line(lb);
+    }
+}
+
 /* ---------- CPU brand string (CPUID 0x80000002-4) ---------- */
 static void detect_cpu_brand(void) {
     UINT32 max_ext = 0, b, c, d;
@@ -4832,6 +4954,11 @@ static void parse_quantai_ini(void) {
             }
             else if (ini_strieq(key, "BitFadeEveryPass") && ini_parse_uint(val, &v)) {
                 g_cfg_bitfade_every_pass = (int)v;
+            }
+            else if (ini_strieq(key, "MarathonHours") && ini_parse_uint(val, &v)) {
+                /* Cap at 24 h — anything longer is a typo. 0 = off. */
+                if (v > 24) v = 24;
+                g_cfg_marathon_hours = v;
             }
         } else if (ini_strieq(section, "Display")) {
             UINT32 v;
@@ -6213,6 +6340,24 @@ static void sample_aggregate_metrics(UINT64 now_ms) {
             if (g_bw_mbps_current > g_bw_mbps_peak) g_bw_mbps_peak = g_bw_mbps_current;
             g_bw_bytes_prev = sum_bytes;
             g_bw_ts_prev_ms = now_ms;
+
+            /* Append to time-bucketed history for the post-run trend
+               analysis. Bucket index = minutes since g_bw_history_start_ms.
+               Keep the bucket MAX (not mean) so transient dips during
+               between-test transitions don't depress the trend. */
+            if (g_bw_history_start_ms == 0) g_bw_history_start_ms = now_ms;
+            UINT64 elapsed = now_ms - g_bw_history_start_ms;
+            UINT32 b = (UINT32)(elapsed / BW_BUCKET_MS);
+            if (b < BW_HISTORY_BUCKETS) {
+                if (b != g_bw_current_bucket) {
+                    /* New bucket — start its max fresh. */
+                    g_bw_history_max[b] = g_bw_mbps_current;
+                    g_bw_current_bucket = b;
+                    if (b + 1 > g_bw_history_count) g_bw_history_count = b + 1;
+                } else if (g_bw_mbps_current > g_bw_history_max[b]) {
+                    g_bw_history_max[b] = g_bw_mbps_current;
+                }
+            }
         }
     } else {
         g_bw_bytes_prev = sum_bytes;
@@ -6968,6 +7113,15 @@ static void write_json_report(UINT64 total_ms) {
         L"  \"verdict\": \"%a\",\r\n",
         n_pass, n_fail, n_skip, grand_err,
         (g_aborted ? "ABORTED" : (grand_err > 0 ? "FAIL" : "PASS")));
+    json_write_chunk(jf, buf);
+
+    /* Bandwidth degradation trend (populated by bw_trend_report when
+       enough buckets were collected; first_pct=0 means n/a). */
+    SPrint(buf, sizeof(buf),
+        L"  \"bw_trend\": {\"buckets\":%d,\"first_quartile_pct\":%d,"
+        L"\"last_quartile_pct\":%d,\"degraded\":%d},\r\n",
+        g_bw_history_count, g_bw_trend_first_pct,
+        g_bw_trend_last_pct, g_bw_trend_degraded);
     json_write_chunk(jf, buf);
 
     /* Detailed error records — most useful single field is xor_mask. */
@@ -8389,6 +8543,13 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         g_bw_ts_prev_ms = 0;
         g_bw_mbps_current = 0;
         g_bw_mbps_peak = 0;
+        /* Reset the BW history ring (trend analyzer reads it fresh). */
+        g_bw_history_count = 0;
+        g_bw_history_start_ms = 0;
+        g_bw_current_bucket = 0xFFFFFFFFu;
+        g_bw_trend_first_pct = 0;
+        g_bw_trend_last_pct  = 0;
+        g_bw_trend_degraded  = 0;
         g_rapl_ts_prev_ms = 0;
         g_pkg_power_w = 0;
         g_pkg_power_w_peak = 0;
@@ -8435,10 +8596,55 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
         if (passes_target == 0) passes_target = 1;
 
+        /* Marathon mode override: when MarathonHours>0, time bounds the run
+           instead of pass count. We set passes_target to "effectively
+           infinite" and let the in-loop time check break us out. */
+        UINT64 marathon_limit_ms = 0;
+        if (g_cfg_marathon_hours > 0) {
+            marathon_limit_ms = (UINT64)g_cfg_marathon_hours * 3600ULL * 1000ULL;
+            passes_target = 0xFFFFFFFFu;     /* sentinel — display will show
+                                                "MARATHON N h" instead of N/M */
+            CHAR16 lb[140];
+            SPrint(lb, sizeof(lb),
+                   L"[MARATHON] enabled — run for %d h, multipass iterator "
+                   L"will wrap when RAM coverage cycle completes",
+                   g_cfg_marathon_hours);
+            log_line(lb);
+        }
+
         /* Iterator state across regions and offsets within each region. */
         UINT32 mp_region = 0;
         UINTN  mp_offset_pages = 0;
         for (UINT32 pass = 0; pass < passes_target && !g_aborted; pass++) {
+            /* Marathon: stop when wall-clock limit hits. Checked at the
+               TOP of each pass so we never enter a pass that will overrun.
+               (A pass typically takes 3-10 min, so worst-case overshoot
+               is one pass duration past the limit.) */
+            if (marathon_limit_ms) {
+                UINT64 elapsed = ms_now() - t_run_start;
+                if (elapsed >= marathon_limit_ms) {
+                    CHAR16 lb[120];
+                    SPrint(lb, sizeof(lb),
+                           L"[MARATHON] %d h limit reached after %d pass(es) — stopping",
+                           g_cfg_marathon_hours, pass);
+                    log_line(lb);
+                    break;
+                }
+                /* Wrap the multipass iterator so we re-cover the whole RAM
+                   range on the next cycle instead of falling through to
+                   "no more (region, offset) slots — done". */
+                if (g_cfg_multipass && mp_region >= g_n_regions) {
+                    mp_region = 0;
+                    mp_offset_pages = 0;
+                    UINT32 elapsed_min = (UINT32)(elapsed / 60000);
+                    CHAR16 lb[140];
+                    SPrint(lb, sizeof(lb),
+                           L"[MARATHON] coverage cycle complete at t+%d min — "
+                           L"wrapping iterator for next cycle",
+                           elapsed_min);
+                    log_line(lb);
+                }
+            }
             g_cur_pass = pass;
             g_pass_idx_disp = pass + 1;
             g_pass_total_disp = passes_target;
@@ -8634,6 +8840,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         /* Snapshot MCA banks BEFORE rendering summary so the summary can
            report the new-error count alongside our own pattern errors. */
         if (g_has_mca) mca_report_diff();
+        /* BW degradation trend: useful in long/marathon runs to catch
+           silent throttling. Logs first vs last quartile means. */
+        bw_trend_report();
         render_summary(total_ms);
 
         /* Dump per-error detail to the log — XOR mask is the most useful

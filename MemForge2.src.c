@@ -1448,6 +1448,13 @@ typedef enum {
        CPUs to ~75-90°C (vs ~36°C without them — basically idle). */
     KER_THERMAL_SOAK,   /* 3 min sustained AVX2 FMA + memory writes — heat */
     KER_BW_SOAK,        /* 5 min streaming writes+reads — memory bandwidth */
+    KER_L3_STRESS,      /* L3 cache resident workload — exposes L3-cell faults
+                           that DRAM-only tests miss (CLFLUSH evicts to DRAM,
+                           so DRAM tests bypass L3 storage entirely). */
+    KER_STRIDE_BW,      /* Stride-sweep BW probe — runs sustained reads at
+                           strides 64 B / 1 KB / 4 KB / 64 KB and reports each.
+                           Drop at one stride = TLB / page-table issue, drop
+                           at cache-line stride only = channel imbalance. */
 } kernel_id_t;
 
 /* ---------- Detailed error capture ----------
@@ -3275,6 +3282,133 @@ bw_done:
     a->errors = e;
 }
 
+/* ---------- L3 cache stress (KER_L3_STRESS) ----------
+   Pattern tests above CLFLUSH between write and verify (or use NT stores),
+   so the data round-trips DRAM and we never observe the L3 cells. This
+   kernel deliberately KEEPS the working set in L3 by:
+     1. Picking a region small enough to fit L3 per core (we conservatively
+        assume 1 MB — true for every x86 CPU since Nehalem 2008).
+     2. After writing the pattern, doing many short read loops without
+        flushing. L1/L2 will hold the hot lines but eviction sends them to
+        L3 not DRAM, so cached values do live in L3 between iterations.
+     3. Verifying at the end and recording any bit flip.
+   Marginal L3 cells either (a) flip a bit (caught here) or (b) trigger
+   single-bit ECC correction that fires MCA bank 1 — also reported.
+   Duration: ~10 s — short kernel, not the bottleneck of any pass. */
+static void run_l3_stress(ap_arg_t *a) {
+    /* 1 MB working set fits in L3 on every modern x86 CPU. */
+    UINTN L3_BYTES = 1024ULL * 1024ULL;
+    UINTN n = L3_BYTES / 8;
+    if (n > a->n_qwords) n = a->n_qwords;
+    UINTN step = n / PROGRESS_GRAIN; if (!step) step = n;
+    UINT64 e = 0;
+    a->bytes = 0;
+    UINT64 *p = a->base;
+
+    /* Two-phase pattern: write 0xA5..., read+rewrite XOR mask, final verify.
+       This stresses cell stability under repeated read+write cycles, which
+       is the workload most likely to expose L3 retention faults. */
+    UINT64 PAT_A = 0xA5A5A5A5A5A5A5A5ULL;
+    UINT64 PAT_B = 0x5A5A5A5A5A5A5A5AULL;
+
+    /* Phase 1: initialise. */
+    for (UINTN i = 0; i < n; i++) p[i] = PAT_A;
+    a->bytes += (UINT64)n * 8;
+
+    /* Phase 2: ~10 s of read-modify-write loops. Each iteration toggles
+       between PAT_A and PAT_B so cells get exercised in both directions. */
+    UINT64 t_start = ms_now();
+    UINT32 iter = 0;
+    while (ms_now() - t_start < 10000 && !g_aborted) {
+        UINT64 want = (iter & 1) ? PAT_B : PAT_A;
+        UINT64 next = (iter & 1) ? PAT_A : PAT_B;
+        for (UINTN i = 0; i < n; i++) {
+            if (p[i] != want) {
+                e++;
+                record_error(a->kernel, a->core_idx,
+                             (UINT64)(UINTN)&p[i], want, p[i]);
+            }
+            p[i] = next;
+            if ((i & 4095) == 0) {
+                UINT64 dt = ms_now() - t_start;
+                UINT32 prog = (UINT32)(dt * 1000ULL / 10000ULL);
+                if (prog > 1000) prog = 1000;
+                a->progress = prog;
+                if ((i & 65535) == 0) ap_yield(a);
+            }
+        }
+        a->bytes += (UINT64)n * 8 * 2;   /* read + write */
+        iter++;
+    }
+    a->progress = 1000;
+    a->errors = e;
+}
+
+/* ---------- Stride-sweep BW probe (KER_STRIDE_BW) ----------
+   Reads the buffer with 4 different stride patterns, ~3 s each (12 s total).
+   The bytes-per-second at each stride exposes platform pathologies:
+     64 B    — cache-line, maximises prefetcher utility
+     1 KB    — outside hardware prefetcher window; reveals raw IMC bandwidth
+     4 KB    — page-stride; reveals TLB miss cost
+     64 KB   — > L2 set associativity; reveals cache set conflicts
+   A drop at JUST ONE stride is the diagnostic signal — uniform low BW =
+   hot system, narrow drop = a real architectural problem (bad channel
+   interleave / TLB shootdown / set conflict).
+   Results are stored in g_stride_mbps[core][phase] for the BSP to report
+   after all APs finish. */
+static volatile UINT32 g_stride_mbps[MAX_CORES][4];   /* per-core, per-phase MB/s */
+
+static void run_stride_bw(ap_arg_t *a) {
+    UINTN n = a->n_qwords;
+    UINTN n_bytes = n * 8;
+    static const UINTN strides[4] = { 64, 1024, 4096, 65536 };
+    UINT64 e = 0;
+    a->bytes = 0;
+    UINT64 *p = a->base;
+
+    /* Write a known pattern once so reads have something to verify against.
+       PAT_X picks a value that won't collide with stray zeros/0xFF. */
+    UINT64 PAT_X = 0x1122334455667788ULL;
+    for (UINTN i = 0; i < n; i++) p[i] = PAT_X;
+    a->bytes += (UINT64)n_bytes;
+
+    for (UINT32 ph = 0; ph < 4; ph++) {
+        UINTN stride = strides[ph];
+        UINTN stride_qw = stride / 8;
+        if (stride_qw < 1) stride_qw = 1;
+        UINT64 phase_start = ms_now();
+        UINT64 phase_bytes = 0;
+        while (ms_now() - phase_start < 3000 && !g_aborted) {
+            /* One pass through the buffer at this stride. */
+            volatile UINT64 sink = 0;
+            for (UINTN i = 0; i < n; i += stride_qw) {
+                UINT64 v = p[i];
+                sink ^= v;
+                if (v != PAT_X) {
+                    e++;
+                    record_error(a->kernel, a->core_idx,
+                                 (UINT64)(UINTN)&p[i], PAT_X, v);
+                }
+            }
+            /* Each stride hit one qword (8 B) and pulled in a cache line
+               (64 B) — we count cache-line bytes for honest BW reporting. */
+            phase_bytes += (UINT64)(n / stride_qw) * 64;
+            (void)sink;
+            if (g_aborted) break;
+        }
+        UINT64 dt = ms_now() - phase_start;
+        if (dt > 0 && a->core_idx < MAX_CORES) {
+            UINT32 mbps = (UINT32)((phase_bytes * 1000ULL) / (dt * 1024ULL * 1024ULL));
+            g_stride_mbps[a->core_idx][ph] = mbps;
+        }
+        a->bytes += phase_bytes;
+        a->progress = ((ph + 1) * 1000) / 4;
+        ap_yield(a);
+    }
+    a->progress = 1000;
+    a->errors = e;
+}
+
 /* ---------- CPU feature detection ---------- */
 int g_has_avx2    = 0;
 int g_has_clflush = 0;
@@ -4756,10 +4890,56 @@ static void spd_populate_dimms(void) {
                    d->spd_tRFC_ns, d->spd_tCK_ps);
             log_line(lb);
         }
+        /* DDR5: probe the SPD5118 Hub for device-info MRs and any
+           SMBus-side PEC error counter. The on-die ECC counters
+           themselves (DDR5 MR48-51 inside the DRAM die) are NOT
+           reachable from SMBus — they need MRR (Mode Register Read)
+           via the platform's iMC mailbox, which is chipset-specific
+           and not implemented here. What we CAN read:
+             MR0  Device Type           (0x18 = SPD5118)
+             MR1  Hub Revision
+             MR3  Vendor ID
+             MR48 PEC error counter on SMBus side
+           A non-zero PEC counter is a clear "I²C is noisy" signal that
+           the operator should investigate (cable seating, pull-ups). */
+        if (d->spd_size_class == 5) {
+            UINT8 hub_dev = 0, hub_rev = 0, hub_vid = 0, hub_pec = 0;
+            int got_any = 0;
+            if (smbus_byte_read(a, 0, &hub_dev)) got_any++;
+            if (smbus_byte_read(a, 1, &hub_rev)) got_any++;
+            if (smbus_byte_read(a, 3, &hub_vid)) got_any++;
+            /* MR48 = PEC error counter, register 0x30 on SPD5118. */
+            if (smbus_byte_read(a, 0x30, &hub_pec)) got_any++;
+            if (got_any) {
+                SPrint(lb, sizeof(lb),
+                       L"[SPD5HUB] slot 0x%X: dev=0x%02X rev=0x%02X vid=0x%02X "
+                       L"hub_pec_err=%d",
+                       a, hub_dev, hub_rev, hub_vid, hub_pec);
+                log_line(lb);
+                if (hub_pec > 0) {
+                    SPrint(lb, sizeof(lb),
+                           L"[SPD5HUB] ⚠ slot 0x%X: %d PEC errors on SMBus side — "
+                           L"noisy I²C (check seating / pull-ups)",
+                           a, hub_pec);
+                    log_line(lb);
+                }
+            }
+        }
         dimm_idx++;
     }
     if (dimm_idx == 0) {
         log_line(L"[SPD] no SPDs responded — DDR5 I3C-only platform or all slots empty");
+    }
+    /* One-shot note for the DDR5 case: explain WHY we don't print per-die
+       on-die ECC counters. Operators familiar with DDR5 often expect us
+       to dump them — we make the limitation explicit instead. */
+    if (g_dimm_ddr_type == 0x22 || g_dimm_ddr_type == 0x23) {
+        log_line(L"[ODECC] DDR5 on-die ECC counters (MR48-51) live inside "
+                 L"each DRAM die. They're only reachable via Mode Register "
+                 L"Read through the platform iMC mailbox, which is "
+                 L"chipset-specific. Not implemented here. The SMBus-side "
+                 L"PEC error counter (reported above per slot) is the "
+                 L"closest signal available.");
     }
 }
 
@@ -5570,6 +5750,8 @@ static void EFIAPI ap_entry(VOID *arg) {
         case KER_BIT_FADE_EXT:   run_bit_fade_ext(a);   break;
         case KER_THERMAL_SOAK:   run_thermal_soak(a);   break;
         case KER_BW_SOAK:        run_bw_soak(a);        break;
+        case KER_L3_STRESS:      run_l3_stress(a);      break;
+        case KER_STRIDE_BW:      run_stride_bw(a);      break;
     }
     /* Before signalling done=1, mark this core's live-activity fields as
        "no longer running". Without this, the LAST value sampled while the
@@ -5668,6 +5850,18 @@ static test_def_t g_tests[] = {
       L"DRAM retention: 4 паттерна × 2 мин wait (1, 0, 0xAA, 0xCC)",
       L"DRAM retention: 4 patterns × 2 min wait (1, 0, 0xAA, 0xCC)",
       L"~8 мин", L"~8 min", 0 },
+    /* L3 cache resident workload — exposes L3-cell faults that DRAM-only
+       tests miss (CLFLUSH evicts data out of L3 before verify). */
+    { L"L3 Cache Stress",   L"L3stress",KER_L3_STRESS,
+      L"1 MB рабочий набор в L3, RMW × ~10 сек — ловит L3-cell faults",
+      L"1 MB working set in L3, RMW × ~10 s — catches L3-cell faults",
+      L"~10 с", L"~10 s", 0 },
+    /* Stride-sweep BW probe — 4 strides × 3 s. Drop at just one stride
+       points at TLB / set-associativity / channel-interleave issues. */
+    { L"Stride BW",         L"StrideBW",KER_STRIDE_BW,
+      L"sweep страйдов 64B/1KB/4KB/64KB — TLB / set-conflict / каналы",
+      L"sweep strides 64B/1KB/4KB/64KB — TLB / set-conflict / channels",
+      L"~12 с", L"~12 s", 0 },
 };
 #define N_TESTS (sizeof(g_tests) / sizeof(g_tests[0]))
 
@@ -9025,6 +9219,26 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                    (UINT32)(i + 1), (UINT32)N_TESTS, g_tests[i].name,
                    r.errors, r.bytes / (1024 * 1024), r.time_ms);
             log_line(logbuf);
+            /* Stride-BW: emit per-stride MB/s averaged across cores. A
+               sharp drop at one stride is the diagnostic signal — uniform
+               low values just mean the system is busy. */
+            if (g_tests[i].k == KER_STRIDE_BW) {
+                static const UINTN stride_labels[4] = { 64, 1024, 4096, 65536 };
+                for (UINT32 ph = 0; ph < 4; ph++) {
+                    UINT64 sum = 0; UINT32 cnt = 0;
+                    for (UINT32 c = 0; c < g_n_enabled && c < MAX_CORES; c++) {
+                        if (g_stride_mbps[c][ph] > 0) {
+                            sum += g_stride_mbps[c][ph];
+                            cnt++;
+                        }
+                    }
+                    UINT32 avg = cnt ? (UINT32)(sum / cnt) : 0;
+                    SPrint(logbuf, sizeof(logbuf),
+                           L"[STRIDE] stride %d B: %d MB/s avg across %d cores",
+                           (UINT32)stride_labels[ph], avg, cnt);
+                    log_line(logbuf);
+                }
+            }
 
             render_progress(i, t_run_start, ms_now(), done_tests);
         }

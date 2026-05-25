@@ -3987,6 +3987,189 @@ static void bw_trend_report(void) {
     }
 }
 
+/* ---------- Cold/warm boot delta — persistent last-run record ----------
+   Save a small summary of every run into a UEFI Non-Volatile Variable.
+   At the start of the next run we read it back and log the delta:
+     "[HIST] Previous run (2 boots ago): 0 errors, peak 78 °C, BW 23 GB/s"
+     "[HIST] Delta: temp +6 °C, BW −4 % — possible thermal degradation"
+   Lets a shop see at a glance whether a problem is reproducing across
+   boots or only happened once. Lets a long-term customer-system check
+   spot slow degradation: "BW was 24 GB/s a month ago, today it's 21."
+
+   Storage: one EFI variable, ~96 bytes, vendor GUID below. Flash wear
+   is one write per run end — negligible (NVRAM rated for ~100 k writes).
+
+   We deliberately do NOT include the address-record list to keep storage
+   tiny + because addresses change between runs anyway. */
+static EFI_GUID g_mf_hist_guid = {
+    0xA1B2C3D4, 0x5E6F, 0x7890,
+    { 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89 }
+};
+#define MF_HIST_MAGIC   0x32474642u   /* 'MFG2' little-endian */
+#define MF_HIST_VERSION 1u
+
+typedef struct {
+    UINT32 magic;
+    UINT32 version;
+    /* Wall-clock seconds since 1970 — RT->GetTime gives us the components,
+       we fold to a single 64-bit value via a rough Gregorian conversion
+       (good for human-readable display, not for cryptographic precision). */
+    INT64  run_epoch_s;
+    UINT32 run_seq;             /* +1 every run, lets the log say "5 boots ago" */
+    UINT32 run_total_errors;
+    UINT32 max_temp_c;
+    UINT32 pkg_power_w_peak;
+    UINT32 bw_mbps_peak;
+    UINT32 bw_trend_first_pct;
+    UINT32 bw_trend_last_pct;
+    UINT32 bw_trend_degraded;
+    UINT32 passes_done;
+    UINT32 total_time_s;
+    UINT32 total_ram_mb;
+    UINT32 mca_new_errors;
+    UINT32 cpu_vendor;          /* 1=Intel, 2=AMD, 0=unknown */
+    UINT32 reserved[6];
+} mf_hist_t;
+
+/* Filled at startup by hist_load. If magic doesn't match the slot is
+   treated as empty and g_hist_prev_valid stays 0. */
+static mf_hist_t g_hist_prev;
+static int       g_hist_prev_valid = 0;
+
+/* Approximate days-since-1970 for a (year, month, day) tuple. Doesn't
+   account for leap-year edge cases beyond Gregorian rule — good to
+   ±1 day, fine for "last run was 14 days ago" display. */
+static INT64 epoch_seconds_from_efitime(EFI_TIME *t) {
+    if (!t || t->Year < 1970) return 0;
+    static const UINT16 mdays[12] = {0,31,59,90,120,151,181,212,243,273,304,334};
+    INT64 y = t->Year;
+    INT64 days = (y - 1970) * 365 + ((y - 1969) / 4) - ((y - 1901) / 100) + ((y - 1601) / 400);
+    days += mdays[(t->Month - 1) & 0xF];
+    if (t->Month > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days++;
+    days += (t->Day > 0 ? t->Day - 1 : 0);
+    return days * 86400LL + (INT64)t->Hour * 3600 + (INT64)t->Minute * 60 + t->Second;
+}
+
+static void hist_load(void) {
+    UINTN sz = sizeof(g_hist_prev);
+    UINT32 attr = 0;
+    EFI_STATUS rs = uefi_call_wrapper(RT->GetVariable, 5,
+                                      L"MemForgeLastRun", &g_mf_hist_guid,
+                                      &attr, &sz, &g_hist_prev);
+    if (rs != EFI_SUCCESS || sz < sizeof(UINT32) * 2) {
+        log_line(L"[HIST] no previous run record (first run, or NVRAM cleared)");
+        return;
+    }
+    if (g_hist_prev.magic != MF_HIST_MAGIC) {
+        log_line(L"[HIST] previous record magic mismatch — ignoring");
+        return;
+    }
+    if (g_hist_prev.version != MF_HIST_VERSION) {
+        CHAR16 lb[120];
+        SPrint(lb, sizeof(lb),
+               L"[HIST] previous record schema v%d ≠ current v%d — ignoring",
+               g_hist_prev.version, MF_HIST_VERSION);
+        log_line(lb);
+        return;
+    }
+    g_hist_prev_valid = 1;
+    /* Human-readable summary of the previous run. */
+    CHAR16 lb[260];
+    SPrint(lb, sizeof(lb),
+           L"[HIST] Previous run #%d: errors=%d  max %d°C  CPU peak %d W  "
+           L"BW peak %d MB/s  passes=%d  time=%d s",
+           g_hist_prev.run_seq, g_hist_prev.run_total_errors,
+           g_hist_prev.max_temp_c, g_hist_prev.pkg_power_w_peak,
+           g_hist_prev.bw_mbps_peak, g_hist_prev.passes_done,
+           g_hist_prev.total_time_s);
+    log_line(lb);
+}
+
+static void hist_save_and_diff(UINT64 total_ms) {
+    /* Read current time. */
+    EFI_TIME t;
+    if (uefi_call_wrapper(RT->GetTime, 2, &t, NULL) != EFI_SUCCESS) {
+        return;
+    }
+    UINT32 run_total_errors = (UINT32)g_run_total_errors;
+    if (g_run_total_errors > 0xFFFFFFFFULL) run_total_errors = 0xFFFFFFFFu;
+
+    /* Build the new record. */
+    mf_hist_t cur;
+    for (UINTN i = 0; i < sizeof(cur); i++) ((UINT8*)&cur)[i] = 0;
+    cur.magic              = MF_HIST_MAGIC;
+    cur.version            = MF_HIST_VERSION;
+    cur.run_epoch_s        = epoch_seconds_from_efitime(&t);
+    cur.run_seq            = g_hist_prev_valid ? (g_hist_prev.run_seq + 1) : 1;
+    cur.run_total_errors   = run_total_errors;
+    cur.max_temp_c         = g_max_temp_c;
+    cur.pkg_power_w_peak   = g_pkg_power_w_peak;
+    cur.bw_mbps_peak       = g_bw_mbps_peak;
+    cur.bw_trend_first_pct = g_bw_trend_first_pct;
+    cur.bw_trend_last_pct  = g_bw_trend_last_pct;
+    cur.bw_trend_degraded  = (UINT32)g_bw_trend_degraded;
+    cur.passes_done        = g_run_passes_done;
+    cur.total_time_s       = (UINT32)(total_ms / 1000);
+    cur.total_ram_mb       = (UINT32)g_total_ram_mb;
+    cur.mca_new_errors     = g_mca_new_errors;
+    cur.cpu_vendor         = (UINT32)g_cpu_vendor;
+
+    /* Log delta vs previous run before we overwrite the variable. */
+    if (g_hist_prev_valid) {
+        CHAR16 lb[260];
+        INT32  d_temp = (INT32)cur.max_temp_c - (INT32)g_hist_prev.max_temp_c;
+        INT32  d_err  = (INT32)cur.run_total_errors - (INT32)g_hist_prev.run_total_errors;
+        INT32  d_bw   = 0;
+        if (g_hist_prev.bw_mbps_peak > 0) {
+            INT64 num = (INT64)cur.bw_mbps_peak - (INT64)g_hist_prev.bw_mbps_peak;
+            d_bw = (INT32)((num * 100LL) / (INT64)g_hist_prev.bw_mbps_peak);
+        }
+        INT64 d_secs = cur.run_epoch_s - g_hist_prev.run_epoch_s;
+        INT32 d_days = (INT32)(d_secs / 86400LL);
+        SPrint(lb, sizeof(lb),
+               L"[HIST] Delta vs prev (~%d day(s) ago): errors %+d, "
+               L"temp %+d°C, BW peak %+d%%",
+               d_days, d_err, d_temp, d_bw);
+        log_line(lb);
+        /* Loud warnings on regressions. */
+        if (d_err > 0) {
+            SPrint(lb, sizeof(lb),
+                   L"[HIST] ⚠ REGRESSION: %d new errors since last run",
+                   d_err);
+            log_line(lb);
+        }
+        if (d_temp >= 5) {
+            SPrint(lb, sizeof(lb),
+                   L"[HIST] ⚠ temp rose %d°C vs last run — check airflow/paste",
+                   d_temp);
+            log_line(lb);
+        }
+        if (d_bw <= -5) {
+            SPrint(lb, sizeof(lb),
+                   L"[HIST] ⚠ BW dropped %d%% vs last run — possible degradation",
+                   -d_bw);
+            log_line(lb);
+        }
+    }
+
+    /* Persist. Non-volatile so it survives power-off; BootService-only
+       attribute means runtime/OS can read but not casually overwrite. */
+    EFI_STATUS rs = uefi_call_wrapper(RT->SetVariable, 5,
+                                      L"MemForgeLastRun", &g_mf_hist_guid,
+                                      EFI_VARIABLE_NON_VOLATILE |
+                                      EFI_VARIABLE_BOOTSERVICE_ACCESS,
+                                      sizeof(cur), &cur);
+    if (rs != EFI_SUCCESS) {
+        CHAR16 lb[120];
+        SPrint(lb, sizeof(lb),
+               L"[HIST] SetVariable failed (status=0x%lx) — record not saved",
+               (UINT64)rs);
+        log_line(lb);
+    } else {
+        log_line(L"[HIST] run record saved to NVRAM");
+    }
+}
+
 /* ---------- CPU brand string (CPUID 0x80000002-4) ---------- */
 static void detect_cpu_brand(void) {
     UINT32 max_ext = 0, b, c, d;
@@ -4496,6 +4679,29 @@ static void spd_populate_dimms(void) {
            means no SPD responded. */
         if (!smbus_byte_read(a, 0, &first)) continue;
         if (first == 0x00 || first == 0xFF) continue;
+        /* SMBus signal-integrity probe: re-read byte 0 a few times. SPD
+           byte 0 is static EEPROM content — every read MUST return the
+           same value. Mismatches or NAKs indicate a noisy SMBus (poor
+           cable seating, motherboard SI issues, marginal pull-ups). This
+           doesn't affect memory testing but the operator wants to know
+           if the platform's I²C is flaky before trusting any other SPD
+           data. Cheap — 16 short reads, ~5 ms total. */
+        {
+            UINT32 mismatches = 0, nacks = 0;
+            const UINT32 probes = 16;
+            for (UINT32 p = 0; p < probes; p++) {
+                UINT8 v;
+                if (!smbus_byte_read(a, 0, &v)) nacks++;
+                else if (v != first)            mismatches++;
+            }
+            if (mismatches > 0 || nacks > 0) {
+                SPrint(lb, sizeof(lb),
+                       L"[SMBUS] slot 0x%X integrity: %d/%d mismatches, "
+                       L"%d/%d NAKs — possible SI issue on SMBus",
+                       a, mismatches, probes, nacks, probes);
+                log_line(lb);
+            }
+        }
         /* Real SPD — pull 384 bytes (covers DDR4 manufacturer block). */
         UINTN got = spd_read_bytes(a, 0, sizeof(buf), buf);
         if (got < 4) continue;
@@ -8406,6 +8612,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
        (single-bit ECC corrections, marginal cells, etc.). */
     mca_detect();
     if (g_has_mca) mca_snapshot(g_mca_baseline);
+    /* Read the previous run record from NVRAM (cold/warm-boot delta).
+       Logs "[HIST] Previous run #N: ..." if found; silent on first run. */
+    hist_load();
     /* Theoretical peak DRAM bandwidth for the % utilization indicator:
          speed_MT/s × 8 bytes/transfer × channels = peak MB/s
        This is a SHARED peak across all cores reading the same DIMMs. */
@@ -8843,6 +9052,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         /* BW degradation trend: useful in long/marathon runs to catch
            silent throttling. Logs first vs last quartile means. */
         bw_trend_report();
+        /* Persist this run's summary to NVRAM and log delta vs prev run.
+           Lets a shop see across reboots whether the symptom reproduces. */
+        hist_save_and_diff(total_ms);
         render_summary(total_ms);
 
         /* Dump per-error detail to the log — XOR mask is the most useful

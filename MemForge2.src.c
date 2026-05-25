@@ -831,19 +831,22 @@ static void log_line(CHAR16 *s) {
     buf[i++] = '\n';
     UINTN len = i;
     uefi_call_wrapper(g_logfile->Write, 3, g_logfile, &len, buf);
-    /* No per-line Flush. On HP business systems and a few cheap USB sticks
-       the FAT driver synchronous-writes the dirty cluster + FAT entry on
-       every Flush, which turns 100 log lines into seconds of stalled
-       USB I/O during init. We pay for explicit Flush at the end of init
-       and after every completed test run instead — see flush_log_now()
-       calls scattered through the test driver. The cost of skipping the
-       per-line flush is that if the program hard-crashes mid-init, the
-       last 1-2 lines may be lost. Worth it for the 10× faster init. */
+    /* Flush after every line. RELIABILITY > speed: the user often pulls
+       the USB the moment they see what they need (or thinks the tester
+       froze and yanks it). Without per-line flush, all content stays in
+       the FAT in-memory cache and is gone forever after USB removal.
+       Previously we batched flushes at checkpoints (before main menu,
+       after each test) for HP business firmware speed — but that left
+       a window of seconds during init where pulling the USB lost the
+       entire log. Per-line flush adds ~1-3 sec to init on HP, that's
+       acceptable now we show the splash so user knows it's alive. */
+    uefi_call_wrapper(g_logfile->Flush, 1, g_logfile);
 }
 
-/* Caller-driven flush. Call at checkpoints (end of init, after each test,
-   before user-input wait) so users see fresh log content if they yank
-   the USB. */
+/* Caller-driven flush. With per-line flush above this is redundant for
+   the log file itself, but we keep the helper as a no-op so existing
+   call sites don't break. Could in future be used for an explicit
+   "fsync now" hook if the FAT driver lies about Flush completion. */
 static void flush_log_now(void) {
     if (!g_logfile) return;
     uefi_call_wrapper(g_logfile->Flush, 1, g_logfile);

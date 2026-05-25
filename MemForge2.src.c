@@ -6969,6 +6969,395 @@ static test_summary_t run_test_mc(UINTN test_idx) {
     return s;
 }
 
+/* ---------- Simple verdict screen (shown by default after tests) ----------
+   Designed for a shop technician / customer standing over the screen, NOT
+   for a memory engineer reading the log. Three states:
+     ✓ PASS  — green big text "MEMORY OK"
+     ⚠ WARN  — yellow "MEMORY MARGINAL", explain what's off
+     ✗ FAIL  — red, name the DIMM to replace + plain language + S/N for warranty
+   Press [D] to drill into the existing technical render_summary table. */
+
+typedef enum {
+    VERDICT_PASS = 0,
+    VERDICT_WARN = 1,
+    VERDICT_FAIL = 2
+} verdict_kind_t;
+
+typedef enum {
+    CONF_LOW = 0,        /* 1-2 scattered errors */
+    CONF_MED = 1,        /* 3-9 errors, clustered on one DIMM */
+    CONF_HIGH = 2        /* 10+ clustered OR stuck-bit/row/bank detected */
+} verdict_confidence_t;
+
+/* Decide what overall verdict to show. PASS = clean run, WARN = no errors
+   but worrying signals (MCA new corrected errors, BW degraded, big temp
+   regression vs prev run), FAIL = any errors recorded. */
+static verdict_kind_t compute_verdict_kind(void) {
+    if (g_aborted)            return VERDICT_WARN;   /* incomplete — flag */
+    if (g_err_count > 0)      return VERDICT_FAIL;
+    if (g_mca_new_errors > 0) return VERDICT_WARN;
+    if (g_bw_trend_degraded >= 2) return VERDICT_WARN;  /* severe BW drop */
+    /* Cold/warm boot delta — large temp regression vs last run = WARN */
+    if (g_hist_prev_valid &&
+        g_hist_prev.max_temp_c > 0 &&
+        g_max_temp_c > g_hist_prev.max_temp_c + 8) return VERDICT_WARN;
+    return VERDICT_PASS;
+}
+
+/* Decide how confident we are about the failure location. HIGH only if
+   we have a stuck pattern (same XOR mask repeated, same row, or same
+   bank) — those localise to a specific cell/wordline/bank. MED if
+   errors cluster on one DIMM but pattern is unclear. LOW if scattered. */
+static verdict_confidence_t compute_confidence(void) {
+    if (g_err_count == 0) return CONF_LOW;
+    UINT32 stuck_n = 0;
+    UINT64 stuck_x = find_stuck_bit(&stuck_n);
+    UINT32 srow_n = 0;  find_stuck_row(&srow_n);
+    UINT32 sbank_n = 0; find_stuck_bank(&sbank_n);
+    if ((stuck_n >= 5 && stuck_x != 0) || srow_n >= 3 || sbank_n >= 3)
+        return CONF_HIGH;
+    if (g_err_count >= 10) return CONF_HIGH;
+    if (g_err_count >= 3)  return CONF_MED;
+    return CONF_LOW;
+}
+
+/* Draw a string centered horizontally at the given pixel-Y, with optional
+   font-scale override (2 = double-size for headlines). Restores g_font_scale
+   on exit. */
+static void verdict_say_centered(CHAR16 *s, UINTN y, UINT32 color, UINT32 scale) {
+    UINT32 saved = g_font_scale;
+    if (scale > 0) g_font_scale = scale;
+    UINTN cw_now = FONT_ADVANCE * g_font_scale;
+    UINTN w = StrLen(s) * cw_now;
+    UINTN x = (g_w > w) ? (g_w - w) / 2 : 0;
+    gfx_draw_str_color(x, y, s, color);
+    g_font_scale = saved;
+}
+
+/* Compose plain-language "what's broken" text into a buffer. Pulls from
+   the localization helpers (stuck-bit / stuck-row / stuck-bank / chip).
+   At most 2 lines so the screen stays readable. */
+static int verdict_describe_what_broke(CHAR16 *line1, UINTN cap1,
+                                       CHAR16 *line2, UINTN cap2,
+                                       int dominant_dimm_0based) {
+    line1[0] = 0; line2[0] = 0;
+    int n = 0;
+
+    UINT32 stuck_n = 0;
+    UINT64 stuck_x = find_stuck_bit(&stuck_n);
+    int bp = single_bit_pos(stuck_x);
+    if (stuck_n >= 5 && bp >= 0 && dominant_dimm_0based >= 0) {
+        CHAR16 chip[64];
+        chip_label_for_bit((UINT32)dominant_dimm_0based, bp, chip, 64);
+        SPrint(line1, cap1,
+               T(L"• %s — бит %d застрял (%d ошибок этого типа)",
+                 L"• %s — bit %d stuck (%d errors of this type)"),
+               chip, bp, stuck_n);
+        n++;
+    }
+
+    UINT32 srow_n = 0;
+    UINT64 srow = find_stuck_row(&srow_n);
+    if (srow_n >= 3) {
+        CHAR16 *target = (n == 0) ? line1 : line2;
+        UINTN cap = (n == 0) ? cap1 : cap2;
+        SPrint(target, cap,
+               T(L"• Повреждён ряд ячеек ~0x%lx (%d ошибок в одном ряду)",
+                 L"• Damaged cell row ~0x%lx (%d errors in same row)"),
+               srow, srow_n);
+        n++;
+        if (n >= 2) return n;
+    }
+
+    UINT32 sbank_n = 0;
+    UINT32 sbank = find_stuck_bank(&sbank_n);
+    if (sbank_n >= 3) {
+        CHAR16 *target = (n == 0) ? line1 : line2;
+        UINTN cap = (n == 0) ? cap1 : cap2;
+        SPrint(target, cap,
+               T(L"• Повреждена секция памяти (bank-group %d / bank %d, %d ошибок)",
+                 L"• Damaged memory bank (bank-group %d / bank %d, %d errors)"),
+               (sbank >> 4) & 0xF, sbank & 0xF, sbank_n);
+        n++;
+        if (n >= 2) return n;
+    }
+
+    /* Fallback when no clear pattern — say total error count + dominant DIMM */
+    if (n == 0) {
+        SPrint(line1, cap1,
+               T(L"• %ld ошибок памяти без чёткой локализации",
+                 L"• %ld memory errors without a clear pattern"),
+               (UINT64)g_err_count);
+    }
+    return n;
+}
+
+static void render_simple_verdict(UINT64 total_ms) {
+    cls();
+    verdict_kind_t v = compute_verdict_kind();
+
+    /* Header strip color matches the verdict — green/yellow/red gradient */
+    UINT32 strip_col, strip_dk, strip_hi;
+    CHAR16 *title, *subtitle;
+    switch (v) {
+        case VERDICT_PASS:
+            strip_col = COL_OK; strip_dk = COL_OK_DK; strip_hi = COL_ACCENT_HI;
+            title    = T(L"✓ ПАМЯТЬ В ПОРЯДКЕ",   L"✓ MEMORY OK");
+            subtitle = T(L"Все тесты пройдены без ошибок",
+                         L"All tests passed, no errors");
+            break;
+        case VERDICT_WARN:
+            strip_col = COL_RUN; strip_dk = COL_RUN; strip_hi = COL_ACCENT_HI;
+            title    = T(L"⚠ ПАМЯТЬ НА ГРАНИ", L"⚠ MEMORY MARGINAL");
+            subtitle = T(L"Тесты прошли, но есть тревожные сигналы",
+                         L"Tests passed, but warning signals detected");
+            break;
+        default: /* VERDICT_FAIL */
+            strip_col = COL_FAIL; strip_dk = COL_FAIL_DK; strip_hi = COL_FAIL;
+            title    = T(L"✗ НАЙДЕНА НЕИСПРАВНОСТЬ", L"✗ MEMORY FAILURE FOUND");
+            subtitle = T(L"Обнаружены ошибки памяти — требуется замена",
+                         L"Memory errors detected — replacement required");
+            break;
+    }
+
+    /* Top gradient strip */
+    UINTN strip_h = g_char_h * 2 + 16;
+    blt_gradient_v(0, 0, g_w, strip_h, strip_col, strip_dk);
+    blt_fill(0, strip_h - 3, g_w, 1, strip_hi);
+
+    /* Big title — 2× font, centered on the strip */
+    UINT32 title_scale = (g_w >= 1280) ? 2 : 1;
+    UINTN title_y = (strip_h - g_char_h * title_scale) / 2;
+    verdict_say_centered(title, title_y, COL_FG, title_scale);
+
+    /* Subtitle below the strip */
+    UINTN y = strip_h + g_pad * 2;
+    verdict_say_centered(subtitle, y, COL_FG, 1);
+    y += g_char_h * 2;
+
+    /* Quick stats row — RAM, duration, errors. Always visible. */
+    CHAR16 stats[160];
+    UINT32 secs = (UINT32)(total_ms / 1000);
+    UINT32 hh = secs / 3600, mm = (secs / 60) % 60, ss = secs % 60;
+    UINT64 ram_gb_x10 = (g_total_ram_mb * 10ULL + 512) / 1024ULL;
+    SPrint(stats, sizeof(stats),
+           T(L"%ld.%ld ГБ %s  ·  %d:%02d:%02d  ·  %ld ошибок",
+             L"%ld.%ld GB %s  ·  %d:%02d:%02d  ·  %ld errors"),
+           ram_gb_x10 / 10, ram_gb_x10 % 10,
+           g_dimm_ddr_type ? ddr_type_name(g_dimm_ddr_type) : L"RAM",
+           hh, mm, ss, (UINT64)g_err_count);
+    verdict_say_centered(stats, y, COL_DIM, 1);
+    y += g_char_h * 2;
+
+    /* Center content card */
+    UINTN card_w = (g_w > 200) ? (g_w * 3 / 4) : g_w;
+    UINTN card_x = (g_w - card_w) / 2;
+    UINTN card_h = g_char_h * 12 + 16;
+    blt_panel(card_x, y, card_w, card_h, COL_PANEL, COL_BORDER);
+    UINTN cx = card_x + g_pad;
+    UINTN cy = y + g_pad;
+    UINTN cline = g_char_h;
+
+    if (v == VERDICT_PASS) {
+        gfx_draw_str_color(cx, cy,
+            T(L"  Можно отдавать клиенту.",
+              L"  Safe to ship to customer."),
+            COL_OK);
+        cy += cline * 2;
+        /* Optional thermal / power peak — useful summary at a glance */
+        CHAR16 ln[160];
+        if (g_max_temp_c > 0) {
+            SPrint(ln, sizeof(ln),
+                   T(L"  Пик температуры:  %d °C",
+                     L"  Peak temperature: %d °C"),
+                   g_max_temp_c);
+            gfx_draw_str_color(cx, cy, ln, COL_FG);
+            cy += cline;
+        }
+        if (g_pkg_power_w_peak > 0) {
+            SPrint(ln, sizeof(ln),
+                   T(L"  Пик мощности CPU: %d Вт",
+                     L"  Peak CPU power:   %d W"),
+                   g_pkg_power_w_peak);
+            gfx_draw_str_color(cx, cy, ln, COL_FG);
+            cy += cline;
+        }
+        if (g_throttle_total > 0) {
+            SPrint(ln, sizeof(ln),
+                   T(L"  Тротлинг:         %d событий (норма для долгой нагрузки)",
+                     L"  Throttle events:  %d (normal under sustained load)"),
+                   g_throttle_total);
+            gfx_draw_str_color(cx, cy, ln, COL_DIM);
+            cy += cline;
+        }
+    } else if (v == VERDICT_WARN) {
+        gfx_draw_str_color(cx, cy,
+            T(L"  Что обнаружено:",
+              L"  What was detected:"),
+            COL_ACCENT_HI);
+        cy += cline + 4;
+        CHAR16 ln[200];
+        if (g_aborted) {
+            gfx_draw_str_color(cx, cy,
+                T(L"  • Тест прерван пользователем — повтори полный прогон",
+                  L"  • Test aborted by user — re-run full pass"),
+                COL_RUN);
+            cy += cline;
+        }
+        if (g_mca_new_errors > 0) {
+            SPrint(ln, sizeof(ln),
+                T(L"  • Контроллер памяти исправил %d ECC-ошибок без сбоя теста",
+                  L"  • Memory controller corrected %d ECC errors silently"),
+                g_mca_new_errors);
+            gfx_draw_str_color(cx, cy, ln, COL_RUN);
+            cy += cline;
+            gfx_draw_str_color(cx + g_char_w * 4, cy,
+                T(L"  (память работает, но скоро может начать сбоить)",
+                  L"  (memory works for now but may start failing soon)"),
+                COL_DIM);
+            cy += cline;
+        }
+        if (g_bw_trend_degraded >= 2) {
+            SPrint(ln, sizeof(ln),
+                T(L"  • Пропускная способность упала с %d%% до %d%% за прогон",
+                  L"  • Bandwidth dropped from %d%% to %d%% during the run"),
+                g_bw_trend_first_pct, g_bw_trend_last_pct);
+            gfx_draw_str_color(cx, cy, ln, COL_RUN);
+            cy += cline;
+            gfx_draw_str_color(cx + g_char_w * 4, cy,
+                T(L"  (возможно термальный тротлинг — проверь охлаждение)",
+                  L"  (possible thermal throttling — check cooling)"),
+                COL_DIM);
+            cy += cline;
+        }
+        if (g_hist_prev_valid &&
+            g_max_temp_c > g_hist_prev.max_temp_c + 8) {
+            SPrint(ln, sizeof(ln),
+                T(L"  • Температура +%d °C по сравнению с прошлым прогоном",
+                  L"  • Temperature rose %d °C vs previous run"),
+                g_max_temp_c - g_hist_prev.max_temp_c);
+            gfx_draw_str_color(cx, cy, ln, COL_RUN);
+            cy += cline;
+            gfx_draw_str_color(cx + g_char_w * 4, cy,
+                T(L"  (проверь термопасту, кулер, вентиляторы)",
+                  L"  (check thermal paste, cooler, fans)"),
+                COL_DIM);
+            cy += cline;
+        }
+    } else { /* VERDICT_FAIL */
+        int didx = dominant_dimm_idx();
+        verdict_confidence_t conf = compute_confidence();
+        CHAR16 *conf_str;
+        UINT32  conf_col;
+        switch (conf) {
+            case CONF_HIGH: conf_str = T(L"ВЫСОКАЯ",  L"HIGH");
+                            conf_col = COL_OK;     break;
+            case CONF_MED:  conf_str = T(L"СРЕДНЯЯ", L"MEDIUM");
+                            conf_col = COL_RUN;    break;
+            default:        conf_str = T(L"НИЗКАЯ",  L"LOW");
+                            conf_col = COL_FAIL;   break;
+        }
+
+        CHAR16 ln[220];
+        if (didx >= 0) {
+            dimm_info_t *d = &g_dimms[didx];
+            SPrint(ln, sizeof(ln),
+                T(L"  ЗАМЕНИТЬ:   %a",
+                  L"  REPLACE:    %a"),
+                d->locator);
+            gfx_draw_str_color(cx, cy, ln, COL_FAIL);
+            cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Уверенность: %s",
+                  L"  Confidence:  %s"),
+                conf_str);
+            gfx_draw_str_color(cx, cy, ln, conf_col);
+            cy += cline + 6;
+
+            /* DIMM info card — for warranty / re-order */
+            gfx_draw_str_color(cx, cy,
+                T(L"  ── Информация о планке (для гарантии) ──",
+                  L"  ── DIMM info (for warranty) ──"),
+                COL_DIM);
+            cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Производитель:  %a",
+                  L"  Manufacturer:   %a"),
+                d->manufacturer[0] ? (CHAR8*)d->manufacturer : (CHAR8*)"?");
+            gfx_draw_str_color(cx, cy, ln, COL_FG); cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Модель:         %a",
+                  L"  Part number:    %a"),
+                d->part_number[0] ? (CHAR8*)d->part_number : (CHAR8*)"?");
+            gfx_draw_str_color(cx, cy, ln, COL_FG); cy += cline;
+            if (d->spd_present && (d->spd_serial[0] || d->spd_serial[1] ||
+                                    d->spd_serial[2] || d->spd_serial[3])) {
+                SPrint(ln, sizeof(ln),
+                    T(L"  Серийный номер: %02X%02X%02X%02X",
+                      L"  Serial number:  %02X%02X%02X%02X"),
+                    d->spd_serial[0], d->spd_serial[1],
+                    d->spd_serial[2], d->spd_serial[3]);
+                gfx_draw_str_color(cx, cy, ln, COL_FG); cy += cline;
+                if (d->spd_mfg_year && d->spd_mfg_week) {
+                    SPrint(ln, sizeof(ln),
+                        T(L"  Дата выпуска:   20%02X, неделя %d",
+                          L"  Manufactured:   20%02X, week %d"),
+                        d->spd_mfg_year, d->spd_mfg_week);
+                    gfx_draw_str_color(cx, cy, ln, COL_FG); cy += cline;
+                }
+            }
+            cy += cline / 2;
+
+            gfx_draw_str_color(cx, cy,
+                T(L"  ── Что обнаружено ──",
+                  L"  ── What was detected ──"),
+                COL_DIM);
+            cy += cline;
+            CHAR16 l1[220], l2[220];
+            verdict_describe_what_broke(l1, sizeof(l1) / sizeof(CHAR16),
+                                         l2, sizeof(l2) / sizeof(CHAR16),
+                                         didx);
+            if (l1[0]) { gfx_draw_str_color(cx + g_char_w, cy, l1, COL_FAIL); cy += cline; }
+            if (l2[0]) { gfx_draw_str_color(cx + g_char_w, cy, l2, COL_FAIL); cy += cline; }
+        } else {
+            /* No SMBIOS Type 20 mapping — best we can do is total + advice */
+            SPrint(ln, sizeof(ln),
+                T(L"  Найдено %ld ошибок — точную планку определить не удалось",
+                  L"  %ld errors found — could not pinpoint specific DIMM"),
+                (UINT64)g_err_count);
+            gfx_draw_str_color(cx, cy, ln, COL_FAIL); cy += cline + 6;
+            gfx_draw_str_color(cx, cy,
+                T(L"  Рекомендация:",
+                  L"  Recommendation:"),
+                COL_ACCENT_HI);
+            cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  • Проверь каждую планку отдельно: в quantai.ini",
+                  L"  • Test each DIMM separately: in quantai.ini"),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"    укажи TestOnlyDimm=1, потом 2, и т.д.",
+                  L"    set TestOnlyDimm=1, then 2, etc."),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  • Сбрось XMP/EXPO в BIOS — может помочь",
+                  L"  • Reset XMP/EXPO in BIOS — may help"),
+                COL_FG); cy += cline;
+        }
+    }
+
+    /* Footer hint — same key handling as the technical summary, plus [D]. */
+    UINTN foot_y = g_h - g_char_h - 8;
+    blt_fill(0, foot_y - 4, g_w, g_char_h + 8, COL_PANEL_ALT);
+    blt_fill(0, foot_y - 5, g_w, 1, COL_BORDER);
+    CHAR16 footer[200];
+    SPrint(footer, sizeof(footer),
+           T(L"[D] технические детали     [M] меню     [ESC] перезагрузка     [L] %s",
+             L"[D] technical details     [M] menu     [ESC] reboot     [L] %s"),
+           g_lang ? L"RU" : L"EN");
+    verdict_say_centered(footer, foot_y, COL_ACCENT_HI, 1);
+}
+
 /* ---------- Final summary table ---------- */
 static void render_summary(UINT64 total_ms) {
     cls();
@@ -7376,19 +7765,19 @@ static void render_summary(UINT64 total_ms) {
        strip, NOT at frow+2 which could be off-screen on tiny fb (Dell
        OptiPlex 5050 = 800×600). Adaptive text width — full version on
        wide screens, abbreviated otherwise. */
-    CHAR16 hint[180];
+    CHAR16 hint[200];
     if (g_text_cols >= 78) {
         SPrint(hint, sizeof(hint),
-               T(L"[M] в меню    [L] язык RU/EN    [ESC] перезагрузка ПК",
-                 L"[M] menu    [L] language EN/RU    [ESC] reboot PC"));
+               T(L"[D] обратно к вердикту   [M] в меню   [L] язык RU/EN   [ESC] перезагрузка",
+                 L"[D] back to verdict   [M] menu   [L] language EN/RU   [ESC] reboot"));
     } else if (g_text_cols >= 50) {
         SPrint(hint, sizeof(hint),
-               T(L"[M] меню   [L] язык   [ESC] перезагрузка",
-                 L"[M] menu   [L] language   [ESC] reboot"));
+               T(L"[D] вердикт   [M] меню   [L] язык   [ESC] reboot",
+                 L"[D] verdict   [M] menu   [L] language   [ESC] reboot"));
     } else {
         SPrint(hint, sizeof(hint),
-               T(L"[M] меню  [ESC] перезагр.",
-                 L"[M] menu  [ESC] reboot"));
+               T(L"[D] вердикт  [M] меню  [ESC] reboot",
+                 L"[D] verdict  [M] menu  [ESC] reboot"));
     }
     UINTN hint_y = g_h - g_char_h - 4;
     blt_fill(0, hint_y - 4, g_w, g_char_h + 8, COL_PANEL_ALT);
@@ -9298,7 +9687,10 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         /* Persist this run's summary to NVRAM and log delta vs prev run.
            Lets a shop see across reboots whether the symptom reproduces. */
         hist_save_and_diff(total_ms);
-        render_summary(total_ms);
+        /* Show the simple verdict screen first — that's what a shop
+           technician / customer actually wants. Press [D] in the wait
+           loop below to toggle to the technical render_summary table. */
+        render_simple_verdict(total_ms);
 
         /* Dump per-error detail to the log — XOR mask is the most useful
            single piece of info, it pinpoints which bits flipped. */
@@ -9421,6 +9813,10 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         log_line(L"[STEP 7] Awaiting post-summary action");
         drain_conin();
         int leave_summary = 0;
+        /* View mode: 0 = simple verdict (default), 1 = technical details.
+           [D] toggles between them; [L] re-renders the current one in the
+           other language; [M] returns to main menu; [ESC] reboots. */
+        int view_mode = 0;
         /* Idle timeout: if the operator walked away and nobody pressed a
            key for 10 min, auto-reboot. The summary is still on screen, the
            log + report.json are already on USB, so nothing is lost.
@@ -9447,11 +9843,20 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 leave_summary = 1;
             } else if (k.UnicodeChar == L'l' || k.UnicodeChar == L'L') {
                 g_lang = !g_lang;
-                render_summary(total_ms);
-            } else if (k.UnicodeChar == L'm' || k.UnicodeChar == L'M') {
+                if (view_mode == 0) render_simple_verdict(total_ms);
+                else                render_summary(total_ms);
+            } else if (k.UnicodeChar == L'd' || k.UnicodeChar == L'D' ||
+                       /* Cyrillic в/В = same physical key as D on RU layout */
+                       k.UnicodeChar == 0x0432 || k.UnicodeChar == 0x0412) {
+                view_mode = !view_mode;
+                if (view_mode == 0) render_simple_verdict(total_ms);
+                else                render_summary(total_ms);
+            } else if (k.UnicodeChar == L'm' || k.UnicodeChar == L'M' ||
+                       /* Cyrillic ь/Ь = same physical key as M on RU layout */
+                       k.UnicodeChar == 0x044C || k.UnicodeChar == 0x042C) {
                 leave_summary = 1;        /* fall through → main menu */
             }
-            /* Any other key — explicitly ignored. The summary stays put. */
+            /* Any other key — explicitly ignored. The view stays put. */
         }
     }
 

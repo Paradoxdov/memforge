@@ -58,3 +58,6 @@ RUN_ANALYZER.sh
 *.swo
 .DS_Store
 Thumbs.db
+
+# Local article drafts — not for repo
+docs/habr-article*.md

@@ -94,12 +94,22 @@ typedef struct {
     UINT8  spd_serial[4];      /* SPD bytes 325-328 — unique serial */
     UINT8  spd_addr;           /* SMBus 7-bit address 0x50..0x57 used to read */
     UINT8  spd_size_class;     /* DDR3=3, DDR4=4, DDR5=5, 0 if unknown */
-    UINT8  spd_tCL;            /* Primary CAS latency from DDR4 SPD byte 23-24 / DDR5 byte 32 */
+    UINT8  spd_tCL;            /* Primary CAS latency in CLOCKS (derived) */
     /* Chip organization, parsed from SPD. Lets us map a stuck-bit position
        on the 64-bit data bus back to a SPECIFIC chip on the DIMM PCB. */
     UINT8  spd_device_width;   /* SDRAM x-width (4, 8, 16) — chip data lanes */
     UINT8  spd_bus_width;      /* Total module bus width (64 normal, 72 ECC) */
     UINT8  spd_ranks;          /* Number of ranks (1, 2, 4) */
+    /* Primary JEDEC timings — all derived from the same SPD MTB/FTB block.
+       CL/tRCD/tRP/tRAS in CLOCK cycles (what BIOS-setup screens show as
+       "16-18-18-38"). tRFC in nanoseconds (typical 280-560 ns range; doesn't
+       fit in a clock count <256 for refresh). tCK in picoseconds — lets us
+       compute effective MT/s = 2,000,000 / tCK_ps. Zero = not extracted. */
+    UINT8  spd_tRCD;           /* row-to-column delay (clocks) */
+    UINT8  spd_tRP;            /* row precharge (clocks) */
+    UINT8  spd_tRAS;           /* row active time (clocks) — typ. 28-40 */
+    UINT16 spd_tRFC_ns;        /* refresh cycle time (ns) */
+    UINT16 spd_tCK_ps;         /* nominal clock period in ps; 0 if unknown */
     UINT8  spd_reserved[0];
 } dimm_info_t;
 
@@ -280,6 +290,9 @@ static UINT64 g_rapl_pkg_energy_prev  = 0;
 static UINT64 g_rapl_ts_prev_ms = 0;
 static UINT32 g_pkg_power_w     = 0;    /* latest sampled value */
 static UINT32 g_pkg_power_w_peak = 0;   /* peak sampled watts during this run */
+static UINT32 g_pkg_vid_mv      = 0;    /* CPU core/package voltage in mV
+                                            (Phase 3 populates this; stays 0
+                                            until VID sampling is wired up) */
 
 /* System-wide telemetry rolled up from per-core ap_arg_t state. */
 static UINT32 g_max_temp_c      = 0;
@@ -1127,12 +1140,23 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
        and temp values are core info and never dropped. */
     if (g_has_rapl && g_pkg_power_w > 0) {
         if (cols >= 110) {
-            SPrint(buf, sizeof(buf),
-                   T(L"  BW %d.%d ГБ/с (%d%%)  ·  %s  ·  CPU %dВт  ·  макс %d°C  ·  тротт %d  ·  uptime %d:%02d",
-                     L"  BW %d.%d GB/s (%d%%)  ·  %s  ·  CPU %dW  ·  max %d°C  ·  throttle %d  ·  uptime %d:%02d"),
-                   gbps_x10 / 10, gbps_x10 % 10, peak_pct,
-                   cum_buf, g_pkg_power_w,
-                   g_max_temp_c, g_throttle_total, up_min, up_sec);
+            /* Widest branch: show VID alongside watts when we have it. */
+            if (g_pkg_vid_mv > 0) {
+                SPrint(buf, sizeof(buf),
+                       T(L"  BW %d.%d ГБ/с (%d%%)  ·  %s  ·  CPU %dВт %d.%03dВ  ·  макс %d°C  ·  тротт %d  ·  %d:%02d",
+                         L"  BW %d.%d GB/s (%d%%)  ·  %s  ·  CPU %dW %d.%03dV  ·  max %d°C  ·  throttle %d  ·  %d:%02d"),
+                       gbps_x10 / 10, gbps_x10 % 10, peak_pct,
+                       cum_buf, g_pkg_power_w,
+                       g_pkg_vid_mv / 1000, g_pkg_vid_mv % 1000,
+                       g_max_temp_c, g_throttle_total, up_min, up_sec);
+            } else {
+                SPrint(buf, sizeof(buf),
+                       T(L"  BW %d.%d ГБ/с (%d%%)  ·  %s  ·  CPU %dВт  ·  макс %d°C  ·  тротт %d  ·  uptime %d:%02d",
+                         L"  BW %d.%d GB/s (%d%%)  ·  %s  ·  CPU %dW  ·  max %d°C  ·  throttle %d  ·  uptime %d:%02d"),
+                       gbps_x10 / 10, gbps_x10 % 10, peak_pct,
+                       cum_buf, g_pkg_power_w,
+                       g_max_temp_c, g_throttle_total, up_min, up_sec);
+            }
         } else if (cols >= 90) {
             SPrint(buf, sizeof(buf),
                    T(L"  BW %d.%d ГБ/с (%d%%)  ·  %s  ·  CPU %dВт  ·  макс %d°C  ·  тротт %d",
@@ -1388,23 +1412,46 @@ typedef struct {
     UINT64 actual;
     UINT64 xor_mask;
     UINT32 pass_idx;      /* multi-pass index when applicable */
+    /* Environmental snapshot at the moment record_error was called. Lets
+       the operator correlate "this error appeared at 87 °C, 12 throttle
+       events accumulated, 134 W" rather than only knowing the run-wide
+       peak. Critical for diagnosing thermal-only failures. */
+    UINT64 t_ms;          /* ms since g_run_start_ms (0 if pre-run) */
+    UINT32 temp_c;        /* g_max_temp_c sampled at error time */
+    UINT32 pkg_watt;      /* g_pkg_power_w (current sample) */
+    UINT32 throttle_cnt;  /* g_throttle_total cumulative */
+    UINT32 vid_mv;        /* g_pkg_vid_mv, populated in Phase 3 */
 } err_record_t;
 static err_record_t g_err_records[MAX_ERR_RECORDS];
 static volatile UINT32 g_err_count = 0;
 static volatile UINT32 g_cur_pass  = 0;
+
+/* The environment globals (g_pkg_power_w, g_max_temp_c, g_throttle_total,
+   g_pkg_vid_mv, g_run_start_ms) are declared earlier in the file. They are
+   read here from an AP context — that's safe because we never write them
+   concurrently during the error path; a torn UINT32 read gives a slightly
+   stale temp/watt sample, which is diagnostically harmless. */
 
 static void record_error(kernel_id_t test, UINT32 core,
                           UINT64 addr, UINT64 exp, UINT64 act) {
     /* Atomic increment + bound check. lock xadd on x86_64. */
     UINT32 idx = __sync_fetch_and_add(&g_err_count, 1);
     if (idx >= MAX_ERR_RECORDS) return;
-    g_err_records[idx].test      = test;
-    g_err_records[idx].core      = core;
-    g_err_records[idx].phys_addr = addr;
-    g_err_records[idx].expected  = exp;
-    g_err_records[idx].actual    = act;
-    g_err_records[idx].xor_mask  = exp ^ act;
-    g_err_records[idx].pass_idx  = g_cur_pass;
+    g_err_records[idx].test         = test;
+    g_err_records[idx].core         = core;
+    g_err_records[idx].phys_addr    = addr;
+    g_err_records[idx].expected     = exp;
+    g_err_records[idx].actual       = act;
+    g_err_records[idx].xor_mask     = exp ^ act;
+    g_err_records[idx].pass_idx     = g_cur_pass;
+    /* Environmental snapshot. ms_now is rdtsc-based and AP-safe. */
+    UINT64 now = ms_now();
+    g_err_records[idx].t_ms         = (g_run_start_ms && now > g_run_start_ms)
+                                       ? (now - g_run_start_ms) : 0;
+    g_err_records[idx].temp_c       = g_max_temp_c;
+    g_err_records[idx].pkg_watt     = g_pkg_power_w;
+    g_err_records[idx].throttle_cnt = g_throttle_total;
+    g_err_records[idx].vid_mv       = g_pkg_vid_mv;
 }
 
 /* ---------- Error localization helpers ----------
@@ -4218,16 +4265,85 @@ static void spd_parse_into_dimm(UINT8 *buf, UINTN n_bytes, dimm_info_t *d) {
         d->spd_serial[1]  = buf[326];
         d->spd_serial[2]  = buf[327];
         d->spd_serial[3]  = buf[328];
-        /* tCK and tAA give the CAS Latency. SPD bytes 24 (tAA in MTB)
-           and 18 (tCK_min in MTB). MTB default = 1/8 ns; tCL = tAA/tCK
-           rounded up. For a quick display we just store tAA byte. */
-        if (n_bytes > 24) d->spd_tCL = buf[24];
-    } else if (d->spd_size_class == 5 && n_bytes >= 200) {
-        /* DDR5 manufacturer fields shift to bytes 512+ which we don't
-           read in this first pass (would need a different access method
-           on newer Sapphire Rapids+ platforms anyway). Just mark as
-           DDR5-present without serial. */
-        if (n_bytes > 40) d->spd_tCL = buf[32];
+    }
+
+    /* === Primary JEDEC timings (DDR3/DDR4 share the same MTB layout) ===
+       MTB (Medium Time Base) is 0.125 ns = 125 ps in every modern SPD spec.
+       FTB (Fine Time Base) tweaks each timing by signed picoseconds for
+       tighter tolerance — we ignore FTB to keep the code simple, which can
+       shift CL by ±1 clock at most in pathological cases (display-only).
+
+       DDR4 SPD layout:
+         byte 18   tCKAVGmin (MTB)
+         byte 24   tAAmin    (MTB)  → CAS latency
+         byte 25   tRCDmin   (MTB)
+         byte 26   tRPmin    (MTB)
+         byte 27   bits[7:4] tRAS upper nibble, bits[3:0] tRC upper nibble
+         byte 28   tRASmin lower byte (combined → 12-bit MTB value)
+         bytes 30-31 tRFC1min in MTB (16-bit little-endian)
+    */
+    if ((d->spd_size_class == 3 || d->spd_size_class == 4) && n_bytes >= 36) {
+        UINT16 mtb_tCK  = buf[18];
+        UINT16 mtb_tAA  = buf[24];
+        UINT16 mtb_tRCD = buf[25];
+        UINT16 mtb_tRP  = buf[26];
+        UINT16 mtb_tRAS = (UINT16)(((buf[27] & 0xF0) << 4) | buf[28]);
+        UINT16 mtb_tRFC = (UINT16)(buf[30] | ((UINT16)buf[31] << 8));
+
+        UINT32 tCK_ps  = (UINT32)mtb_tCK  * 125u;
+        UINT32 tAA_ps  = (UINT32)mtb_tAA  * 125u;
+        UINT32 tRCD_ps = (UINT32)mtb_tRCD * 125u;
+        UINT32 tRP_ps  = (UINT32)mtb_tRP  * 125u;
+        UINT32 tRAS_ps = (UINT32)mtb_tRAS * 125u;
+        UINT32 tRFC_ps = (UINT32)mtb_tRFC * 125u;
+
+        d->spd_tCK_ps = (tCK_ps <= 0xFFFF) ? (UINT16)tCK_ps : 0;
+
+        /* Cycles = round_up(ps / tCK_ps). Guard against tCK_ps=0 (SPD junk). */
+        if (tCK_ps) {
+            UINT32 cl_clk  = (tAA_ps  + tCK_ps - 1) / tCK_ps;
+            UINT32 rcd_clk = (tRCD_ps + tCK_ps - 1) / tCK_ps;
+            UINT32 rp_clk  = (tRP_ps  + tCK_ps - 1) / tCK_ps;
+            UINT32 ras_clk = (tRAS_ps + tCK_ps - 1) / tCK_ps;
+            /* Cap each at 255 — fits UINT8 and any value larger is junk. */
+            d->spd_tCL  = (cl_clk  > 255) ? 255 : (UINT8)cl_clk;
+            d->spd_tRCD = (rcd_clk > 255) ? 255 : (UINT8)rcd_clk;
+            d->spd_tRP  = (rp_clk  > 255) ? 255 : (UINT8)rp_clk;
+            d->spd_tRAS = (ras_clk > 255) ? 255 : (UINT8)ras_clk;
+        }
+        /* tRFC in ns — typical 280-560 ns. Cap at 65535 ns = UINT16. */
+        UINT32 tRFC_ns = tRFC_ps / 1000u;
+        d->spd_tRFC_ns = (tRFC_ns > 65535) ? 65535 : (UINT16)tRFC_ns;
+    } else if (d->spd_size_class == 5 && n_bytes >= 44) {
+        /* DDR5 SPD layout (JEDEC SPD 5.0). Per-byte units shift — MTB is
+           1 ps and timings are 16-bit little-endian fields:
+             bytes 20-21  tCKAVGmin
+             bytes 30-31  tAAmin    (CAS)
+             bytes 32-33  tRCDmin
+             bytes 34-35  tRPmin
+             bytes 36-37  tRASmin
+             bytes 40-41  tRFC1min  (in ns directly per spec)
+           DDR5 also encodes most timings as picoseconds rather than MTB —
+           so the values are already in ps and we skip the ×125 step. */
+        UINT16 tCK_ps  = (UINT16)(buf[20] | ((UINT16)buf[21] << 8));
+        UINT16 tAA_ps  = (UINT16)(buf[30] | ((UINT16)buf[31] << 8));
+        UINT16 tRCD_ps = (UINT16)(buf[32] | ((UINT16)buf[33] << 8));
+        UINT16 tRP_ps  = (UINT16)(buf[34] | ((UINT16)buf[35] << 8));
+        UINT16 tRAS_ps = (UINT16)(buf[36] | ((UINT16)buf[37] << 8));
+        UINT16 tRFC_ns = (n_bytes >= 42) ? (UINT16)(buf[40] | ((UINT16)buf[41] << 8)) : 0;
+
+        d->spd_tCK_ps  = tCK_ps;
+        if (tCK_ps) {
+            UINT32 cl_clk  = ((UINT32)tAA_ps  + tCK_ps - 1) / tCK_ps;
+            UINT32 rcd_clk = ((UINT32)tRCD_ps + tCK_ps - 1) / tCK_ps;
+            UINT32 rp_clk  = ((UINT32)tRP_ps  + tCK_ps - 1) / tCK_ps;
+            UINT32 ras_clk = ((UINT32)tRAS_ps + tCK_ps - 1) / tCK_ps;
+            d->spd_tCL  = (cl_clk  > 255) ? 255 : (UINT8)cl_clk;
+            d->spd_tRCD = (rcd_clk > 255) ? 255 : (UINT8)rcd_clk;
+            d->spd_tRP  = (rp_clk  > 255) ? 255 : (UINT8)rp_clk;
+            d->spd_tRAS = (ras_clk > 255) ? 255 : (UINT8)ras_clk;
+        }
+        d->spd_tRFC_ns = tRFC_ns;
     }
     d->spd_present = 1;
 }
@@ -4292,13 +4408,26 @@ static void spd_populate_dimms(void) {
         HX2(s_week, d->spd_mfg_week);
         #undef HX2
         SPrint(lb, sizeof(lb),
-               L"[SPD] slot 0x%a (DIMM%d): type=%d serial=%a mfg=20%a/W%a tAA=%d bytes=%ld",
+               L"[SPD] slot 0x%a (DIMM%d): type=%d serial=%a mfg=20%a/W%a bytes=%ld",
                s_addr, dimm_idx,
                d->spd_size_class,
                s_ser,
                s_year, s_week,
-               d->spd_tCL, (UINT64)got);
+               (UINT64)got);
         log_line(lb);
+        /* Second line: the timings BIOS-setup style. Effective MT/s is
+           computed as 2,000,000 / tCK_ps (double data rate). Helps the
+           operator instantly see "DDR4-3200 16-18-18-38 tRFC=350ns" vs
+           "DDR4-2666 19-19-19-43 tRFC=350ns" and notice XMP vs JEDEC. */
+        if (d->spd_tCK_ps && d->spd_tCL) {
+            UINT32 mtps = 2000000u / d->spd_tCK_ps;
+            SPrint(lb, sizeof(lb),
+                   L"[SPD]   timings: DDR%d-%d %d-%d-%d-%d  tRFC=%dns  tCK=%dps",
+                   d->spd_size_class, mtps,
+                   d->spd_tCL, d->spd_tRCD, d->spd_tRP, d->spd_tRAS,
+                   d->spd_tRFC_ns, d->spd_tCK_ps);
+            log_line(lb);
+        }
         dimm_idx++;
     }
     if (dimm_idx == 0) {
@@ -6090,6 +6219,20 @@ static void sample_aggregate_metrics(UINT64 now_ms) {
         g_bw_ts_prev_ms = now_ms;
     }
 
+    /* --- 1b) CPU voltage (VID) via IA32_PERF_STATUS (Intel only) ---
+       MSR 0x198 bits[47:32] hold "Current Voltage" in 1/8192 V units on
+       Westmere-and-later Intel CPUs. Formula: mV = raw × 125 / 1024.
+       AMD has a completely different MSR layout (MSR_PSTATE_DEF varies by
+       family) and rdmsr on the Intel MSR would #GP and freeze UEFI — so
+       we MUST guard on g_cpu_vendor. Sanity range 500–2000 mV; anything
+       outside is treated as junk (some firmware writes 0 to the field). */
+    if (g_cpu_vendor == CPU_INTEL) {
+        UINT64 ps = rdmsr_safe(0x198);
+        UINT32 raw = (UINT32)((ps >> 32) & 0xFFFFu);
+        UINT32 mv  = (raw * 125u) / 1024u;
+        if (mv >= 500 && mv <= 2000) g_pkg_vid_mv = mv;
+    }
+
     /* --- 2) Package power via RAPL (Watts = ΔJ / Δs) --- */
     if (g_has_rapl && g_rapl_ts_prev_ms != 0 && now_ms - g_rapl_ts_prev_ms >= 250) {
         UINT64 e_now = rdmsr_safe(g_rapl_pkg_msr) & 0xFFFFFFFFULL;
@@ -6781,7 +6924,9 @@ static void write_json_report(UINT64 total_ms) {
             L"\"organization\":{\"device_width\":%d,\"bus_width\":%d,\"ranks\":%d},"
             L"\"spd\":{\"present\":%a,\"smbus_addr\":\"0x%02X\","
             L"\"serial\":\"%02X%02X%02X%02X\",\"mfg_year\":\"20%02X\",\"mfg_week\":%d,"
-            L"\"jedec_bank\":%d,\"jedec_code\":\"0x%02X\",\"tAA\":%d}}",
+            L"\"jedec_bank\":%d,\"jedec_code\":\"0x%02X\","
+            L"\"timings\":{\"tCL\":%d,\"tRCD\":%d,\"tRP\":%d,\"tRAS\":%d,"
+            L"\"tRFC_ns\":%d,\"tCK_ps\":%d}}}",
             (i > 0) ? "," : "",
             d->locator, d->size_mb, d->manufacturer, d->part_number,
             d->ddr_type ? ddr_type_name(d->ddr_type) : L"?",
@@ -6794,7 +6939,8 @@ static void write_json_report(UINT64 total_ms) {
             d->spd_serial[2], d->spd_serial[3],
             d->spd_mfg_year, d->spd_mfg_week,
             d->spd_jedec_bank, d->spd_jedec_code,
-            d->spd_tCL);
+            d->spd_tCL, d->spd_tRCD, d->spd_tRP, d->spd_tRAS,
+            d->spd_tRFC_ns, d->spd_tCK_ps);
         json_write_chunk(jf, buf);
     }
 
@@ -6848,12 +6994,16 @@ static void write_json_report(UINT64 total_ms) {
             L"\"expected\":\"0x%lx\",\"actual\":\"0x%lx\",\"xor\":\"0x%lx\","
             L"\"pass\":%d,\"dimm\":\"%s\","
             L"\"approx_bank_group\":%d,\"approx_bank\":%d,"
-            L"\"approx_row\":\"0x%lx\",\"approx_col\":\"0x%x\"}",
+            L"\"approx_row\":\"0x%lx\",\"approx_col\":\"0x%x\","
+            /* Environmental snapshot at the moment of the error. */
+            L"\"at\":{\"t_ms\":%ld,\"temp_c\":%d,\"pkg_w\":%d,"
+            L"\"throttle\":%d,\"vid_mv\":%d}}",
             (i > 0) ? "," : "",
             g_tests[r->test].name, r->core + 1,
             r->phys_addr, r->expected, r->actual, r->xor_mask, r->pass_idx,
             dimm_lab,
-            cc.bank_group, cc.bank, cc.row, cc.column);
+            cc.bank_group, cc.bank, cc.row, cc.column,
+            r->t_ms, r->temp_c, r->pkg_watt, r->throttle_cnt, r->vid_mv);
         json_write_chunk(jf, buf);
     }
 
@@ -8513,6 +8663,24 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                        r->phys_addr, r->expected, r->actual, r->xor_mask,
                        dimm_lab,
                        coords.bank_group, coords.bank, coords.row, coords.column);
+                log_line(lb);
+                /* Environmental snapshot at the exact moment this error
+                   was recorded. Lets the operator see "this byte flipped
+                   when CPU was at 87 °C and 134 W" rather than only knowing
+                   the run-wide peak. VID printed only when nonzero (Phase 3
+                   populates it; older builds keep printing 0 mV otherwise). */
+                if (r->vid_mv > 0) {
+                    SPrint(lb, sizeof(lb),
+                           L"[ERR]   when: t+%lds  temp=%d°C  W=%d  throttle=%d  VID=%d.%03dV",
+                           r->t_ms / 1000, r->temp_c, r->pkg_watt,
+                           r->throttle_cnt,
+                           r->vid_mv / 1000, r->vid_mv % 1000);
+                } else {
+                    SPrint(lb, sizeof(lb),
+                           L"[ERR]   when: t+%lds  temp=%d°C  W=%d  throttle=%d",
+                           r->t_ms / 1000, r->temp_c, r->pkg_watt,
+                           r->throttle_cnt);
+                }
                 log_line(lb);
             }
             /* Aggregate analysis: stuck bit + 1-GB histogram + DIMM tally + row/bank. */

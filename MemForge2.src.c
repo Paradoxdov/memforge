@@ -978,11 +978,40 @@ static void compute_layout(UINTN n_tests) {
     g_card_y = g_hdr_h + g_pad + g_char_h;
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
-    /* Ultra-compact mode for tiny framebuffers (Dell OptiPlex 800×600 etc.):
-       arrange cards in 2 side-by-side columns of 6 rows each. Saves 50% of
-       the vertical space cards would otherwise consume, leaving room for
-       the cores panel + overall progress bar + footer. */
-    g_card_cols = (g_h < 700) ? 2 : 1;
+    /* Decide 1-col vs 2-col cards. Three thresholds:
+         1. Tiny framebuffers (g_h < 700): always 2-col (Dell OptiPlex 800×600).
+         2. n_tests is large AND the 1-col layout would push the cores panel
+            below the screen edge: force 2-col. With 14 tests this fires on
+            1080p / 1200p displays where the old 12-test layout used to fit.
+         3. Otherwise 1-col (preferred for readability).
+       To check #2 we compute the height the entire layout would need with
+       1-col cards and compare against g_h. If it overflows, switch.       */
+    g_card_cols = 1;
+    if (g_h < 700) {
+        g_card_cols = 2;
+    } else {
+        /* Probe: with 1-col cards, would the layout overflow?
+           Reserve estimates: header + cards + cores panel + overall + footer.
+           Same formulas used below for the real layout — we just check the
+           sum here BEFORE picking g_card_cols. */
+        UINTN cards_h_1col   = g_card_row_h * n_tests + g_pad;
+        UINTN core_title_h_e = g_compact ? 0 : g_char_h;
+        UINTN core_rh_e      = g_compact ? (g_char_h + 1) : (g_char_h + 4);
+        UINTN shown_e        = (g_n_enabled > 64) ? 64 : g_n_enabled;
+        UINTN cols_e         = (g_n_enabled <= 8) ? 1 : (g_n_enabled <= 32 ? 2 : 4);
+        UINTN rpc_e          = (shown_e + cols_e - 1) / cols_e;
+        UINTN core_h_e       = core_rh_e * (rpc_e + 1) + core_title_h_e + g_pad + 4;
+        if (g_n_enabled > shown_e) core_h_e += core_rh_e;
+        UINTN overall_h_e    = g_compact ? 12 : 16;
+        UINTN footer_h_e     = g_compact ? 36 : (g_h / 14);
+        if (footer_h_e < (UINTN)(g_compact ? 36 : 50))
+            footer_h_e = g_compact ? 36 : 50;
+        UINTN need = g_card_y + cards_h_1col + g_pad + core_h_e
+                   + g_pad + overall_h_e + g_pad + footer_h_e;
+        if (need > g_h) {
+            g_card_cols = 2;
+        }
+    }
     UINTN cards_rows = (n_tests + g_card_cols - 1) / g_card_cols;
     UINTN cards_h = g_card_row_h * cards_rows + g_pad;
 

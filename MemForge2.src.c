@@ -4697,34 +4697,76 @@ static void spd_parse_into_dimm(UINT8 *buf, UINTN n_bytes, dimm_info_t *d) {
     else if (dram_type == 0x0B) d->spd_size_class = 3;  /* DDR3 */
     else                         d->spd_size_class = 0;
 
-    /* Chip organization — bytes 12 (Module Organization) and 13 (Memory
-       Bus Width). Same byte indices on DDR3, DDR4, DDR5.
-         Byte 12:
-           bits [4:3] = Number of Package Ranks (00=1, 01=2, 10=3, 11=4)
-           bits [2:0] = SDRAM Device Width: 000=x4, 001=x8, 010=x16, 011=x32
-         Byte 13:
+    /* Chip organization — byte offsets DIFFER between DDR3 and DDR4/DDR5.
+       The bit-field ENCODING within each byte is the same:
+         "Module Organization" byte:
+           bits [5:3] (DDR3) or [4:3] (DDR4/5) = ranks-minus-one
+           bits [2:0]                          = SDRAM device width
+                                                   (000=x4, 001=x8, 010=x16, 011=x32)
+         "Memory Bus Width" byte:
            bits [4:3] = Bus Width Extension (00=none, 01=+8b for ECC)
-           bits [2:0] = Primary Bus Width: 000=8, 001=16, 010=32, 011=64
-       From these we derive chips_per_rank = bus_width / device_width,
-       used to map a stuck-bit position back to a specific chip on the
-       PCB (chip_index = bit_pos / device_width). */
-    if (n_bytes >= 14) {
-        UINT8 b12 = buf[12];
-        UINT8 b13 = buf[13];
-        UINT8 dw_code  = b12 & 0x07;
-        UINT8 rk_code  = (b12 >> 3) & 0x07;
-        UINT8 bw_code  = b13 & 0x07;
-        UINT8 ext_code = (b13 >> 3) & 0x03;
-        /* Translate codes to numeric. Out-of-range → leave as 0
-           (= "unknown", per-chip mapping then falls back to bit-only). */
-        if (dw_code <= 3) d->spd_device_width = (UINT8)(4 << dw_code);
-        if (rk_code <= 3) d->spd_ranks        = (UINT8)(rk_code + 1);
-        if (bw_code <= 3) d->spd_bus_width    = (UINT8)(8 << bw_code);
-        if (ext_code == 1 && d->spd_bus_width > 0) d->spd_bus_width += 8;  /* ECC */
+           bits [2:0] = Primary Bus Width   (000=8, 001=16, 010=32, 011=64)
+       Bytes:
+         DDR3 (JESD79-3): organization=7, bus width=8
+         DDR4 (JESD79-4): organization=12, bus width=13
+         DDR5 (JESD79-5): organization=235, bus width=235 (treated below)
+       Reading byte 12 on a DDR3 SPD gets "Module Nominal Voltage", which
+       is meaningless as a chip-organization field — exactly the bug that
+       caused HP 8300 to report "x16" on a Samsung x8 module. */
+    {
+        UINT8 b_org = 0, b_bw = 0;
+        int have = 0;
+        if (d->spd_size_class == 3 && n_bytes >= 9) {
+            b_org = buf[7];  b_bw = buf[8];   have = 1;
+        } else if ((d->spd_size_class == 4 || d->spd_size_class == 5) &&
+                   n_bytes >= 14) {
+            b_org = buf[12]; b_bw = buf[13];  have = 1;
+        }
+        if (have) {
+            UINT8 dw_code  = b_org & 0x07;
+            /* DDR3 puts ranks in bits[5:3] (3-bit), DDR4/5 in [4:3] (2-bit).
+               Mask wider for DDR3 so 4-rank LRDIMMs decode correctly. */
+            UINT8 rk_code  = (d->spd_size_class == 3)
+                             ? ((b_org >> 3) & 0x07)
+                             : ((b_org >> 3) & 0x03);
+            UINT8 bw_code  = b_bw & 0x07;
+            UINT8 ext_code = (b_bw >> 3) & 0x03;
+            if (dw_code <= 3) d->spd_device_width = (UINT8)(4 << dw_code);
+            if (rk_code <= 3) d->spd_ranks        = (UINT8)(rk_code + 1);
+            if (bw_code <= 3) d->spd_bus_width    = (UINT8)(8 << bw_code);
+            if (ext_code == 1 && d->spd_bus_width > 0)
+                d->spd_bus_width += 8;       /* ECC */
+        }
     }
 
-    /* DDR4 manufacturer block — bytes 320..328 (we read up to 384). */
-    if (d->spd_size_class == 4 && n_bytes >= 329) {
+    /* Manufacturer / serial / mfg date — byte offsets DIFFER by DDR
+       generation, again. Always BCD-encoded except for the serial which
+       is raw 4-byte unique ID.
+         DDR3 (JESD79-3 Annex K, rev 1.3+):
+           byte 117    Module Mfg JEDEC continuation count (bank)
+           byte 118    Module Mfg JEDEC ID code
+           byte 120    Module Manufacturing Date — Year   (BCD)
+           byte 121    Module Manufacturing Date — Week   (BCD)
+           bytes 122-125  Module Serial Number (4 bytes)
+         DDR4 (JESD79-4 SPD section):
+           byte 320    Module Mfg JEDEC bank
+           byte 321    Module Mfg JEDEC code
+           byte 323    Year (BCD)
+           byte 324    Week (BCD)
+           bytes 325-328  Serial (4 bytes)
+         DDR5: manufacturer block lives in the SPD5 Hub at high offsets we
+         can't reach without I3C — skipped (handled by the SPD5 Hub probe
+         logged separately as [SPD5HUB]).                                 */
+    if (d->spd_size_class == 3 && n_bytes >= 126) {
+        d->spd_jedec_bank = buf[117];
+        d->spd_jedec_code = buf[118];
+        d->spd_mfg_year   = buf[120];
+        d->spd_mfg_week   = buf[121];
+        d->spd_serial[0]  = buf[122];
+        d->spd_serial[1]  = buf[123];
+        d->spd_serial[2]  = buf[124];
+        d->spd_serial[3]  = buf[125];
+    } else if (d->spd_size_class == 4 && n_bytes >= 329) {
         d->spd_jedec_bank = buf[320];
         d->spd_jedec_code = buf[321];
         d->spd_mfg_year   = buf[323];
@@ -4735,28 +4777,46 @@ static void spd_parse_into_dimm(UINT8 *buf, UINTN n_bytes, dimm_info_t *d) {
         d->spd_serial[3]  = buf[328];
     }
 
-    /* === Primary JEDEC timings (DDR3/DDR4 share the same MTB layout) ===
-       MTB (Medium Time Base) is 0.125 ns = 125 ps in every modern SPD spec.
-       FTB (Fine Time Base) tweaks each timing by signed picoseconds for
-       tighter tolerance — we ignore FTB to keep the code simple, which can
-       shift CL by ±1 clock at most in pathological cases (display-only).
+    /* === Primary JEDEC timings === MTB-based encoding shared by DDR3 and
+       DDR4 (default MTB = 0.125 ns = 125 ps); DDR5 uses direct picoseconds.
+       FTB (Fine Time Base) signed adjustments per-timing are ignored to
+       keep the code simple — can shift CL by ±1 clock at worst (display).
 
-       DDR4 SPD layout:
+       DDR3 (JESD79-3) byte map:
+         byte 12   tCKmin   (MTB)
+         byte 16   tAAmin   (MTB)  → CAS latency
+         byte 18   tRCDmin  (MTB)
+         byte 20   tRPmin   (MTB)
+         byte 21   bits[7:4] tRAS upper nibble, bits[3:0] tRC upper nibble
+         byte 22   tRASmin lower byte  → 12-bit MTB value
+         bytes 24-25  tRFCmin (MTB, little-endian 16-bit)
+
+       DDR4 (JESD79-4) byte map:
          byte 18   tCKAVGmin (MTB)
          byte 24   tAAmin    (MTB)  → CAS latency
          byte 25   tRCDmin   (MTB)
          byte 26   tRPmin    (MTB)
-         byte 27   bits[7:4] tRAS upper nibble, bits[3:0] tRC upper nibble
-         byte 28   tRASmin lower byte (combined → 12-bit MTB value)
-         bytes 30-31 tRFC1min in MTB (16-bit little-endian)
-    */
-    if ((d->spd_size_class == 3 || d->spd_size_class == 4) && n_bytes >= 36) {
-        UINT16 mtb_tCK  = buf[18];
-        UINT16 mtb_tAA  = buf[24];
-        UINT16 mtb_tRCD = buf[25];
-        UINT16 mtb_tRP  = buf[26];
-        UINT16 mtb_tRAS = (UINT16)(((buf[27] & 0xF0) << 4) | buf[28]);
-        UINT16 mtb_tRFC = (UINT16)(buf[30] | ((UINT16)buf[31] << 8));
+         byte 27   bits[7:4] tRAS upper, bits[3:0] tRC upper
+         byte 28   tRASmin lower byte
+         bytes 30-31 tRFC1min                                            */
+    if ((d->spd_size_class == 3 && n_bytes >= 26) ||
+        (d->spd_size_class == 4 && n_bytes >= 36)) {
+        int is_d4 = (d->spd_size_class == 4);
+        UINT8 o_tCK  = is_d4 ? 18 : 12;
+        UINT8 o_tAA  = is_d4 ? 24 : 16;
+        UINT8 o_tRCD = is_d4 ? 25 : 18;
+        UINT8 o_tRP  = is_d4 ? 26 : 20;
+        UINT8 o_rasU = is_d4 ? 27 : 21;
+        UINT8 o_rasL = is_d4 ? 28 : 22;
+        UINT8 o_rfcL = is_d4 ? 30 : 24;
+        UINT8 o_rfcH = is_d4 ? 31 : 25;
+
+        UINT16 mtb_tCK  = buf[o_tCK];
+        UINT16 mtb_tAA  = buf[o_tAA];
+        UINT16 mtb_tRCD = buf[o_tRCD];
+        UINT16 mtb_tRP  = buf[o_tRP];
+        UINT16 mtb_tRAS = (UINT16)(((buf[o_rasU] & 0xF0) << 4) | buf[o_rasL]);
+        UINT16 mtb_tRFC = (UINT16)(buf[o_rfcL] | ((UINT16)buf[o_rfcH] << 8));
 
         UINT32 tCK_ps  = (UINT32)mtb_tCK  * 125u;
         UINT32 tAA_ps  = (UINT32)mtb_tAA  * 125u;
@@ -4773,13 +4833,11 @@ static void spd_parse_into_dimm(UINT8 *buf, UINTN n_bytes, dimm_info_t *d) {
             UINT32 rcd_clk = (tRCD_ps + tCK_ps - 1) / tCK_ps;
             UINT32 rp_clk  = (tRP_ps  + tCK_ps - 1) / tCK_ps;
             UINT32 ras_clk = (tRAS_ps + tCK_ps - 1) / tCK_ps;
-            /* Cap each at 255 — fits UINT8 and any value larger is junk. */
             d->spd_tCL  = (cl_clk  > 255) ? 255 : (UINT8)cl_clk;
             d->spd_tRCD = (rcd_clk > 255) ? 255 : (UINT8)rcd_clk;
             d->spd_tRP  = (rp_clk  > 255) ? 255 : (UINT8)rp_clk;
             d->spd_tRAS = (ras_clk > 255) ? 255 : (UINT8)ras_clk;
         }
-        /* tRFC in ns — typical 280-560 ns. Cap at 65535 ns = UINT16. */
         UINT32 tRFC_ns = tRFC_ps / 1000u;
         d->spd_tRFC_ns = (tRFC_ns > 65535) ? 65535 : (UINT16)tRFC_ns;
     } else if (d->spd_size_class == 5 && n_bytes >= 44) {

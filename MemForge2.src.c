@@ -831,16 +831,34 @@ static void log_line(CHAR16 *s) {
     buf[i++] = '\n';
     UINTN len = i;
     uefi_call_wrapper(g_logfile->Write, 3, g_logfile, &len, buf);
-    /* Flush after every line. RELIABILITY > speed: the user often pulls
-       the USB the moment they see what they need (or thinks the tester
-       froze and yanks it). Without per-line flush, all content stays in
-       the FAT in-memory cache and is gone forever after USB removal.
-       Previously we batched flushes at checkpoints (before main menu,
-       after each test) for HP business firmware speed — but that left
-       a window of seconds during init where pulling the USB lost the
-       entire log. Per-line flush adds ~1-3 sec to init on HP, that's
-       acceptable now we show the splash so user knows it's alive. */
+    /* Flush after every line — but Flush() alone is NOT enough on FAT.
+       It commits data to disk clusters but does NOT update the file's
+       size field in the directory entry. If the user pulls the USB
+       while the file is still open, Windows mounts the stick and sees
+       'memforge2.log: size 0' even though the data is sitting in
+       unlinked clusters. Reported by user: "logs опять пустые" after
+       seeing a full summary screen.
+
+       Workaround: Flush + Close + Reopen at saved position. The Close
+       forces FAT to write the updated directory entry. Reopen restores
+       handle for next log_line. Cost: extra ~10-30 ms per log line on
+       cheap USB, total ~1 s extra on init. Acceptable price for the
+       log surviving a USB yank at ANY point. */
     uefi_call_wrapper(g_logfile->Flush, 1, g_logfile);
+    UINT64 pos = 0;
+    uefi_call_wrapper(g_logfile->GetPosition, 2, g_logfile, &pos);
+    uefi_call_wrapper(g_logfile->Close, 1, g_logfile);
+    g_logfile = NULL;
+    if (g_logroot) {
+        EFI_FILE_PROTOCOL *nf = NULL;
+        EFI_STATUS rs = uefi_call_wrapper(g_logroot->Open, 5,
+                            g_logroot, &nf, L"memforge2.log",
+                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+        if (rs == EFI_SUCCESS && nf) {
+            uefi_call_wrapper(nf->SetPosition, 2, nf, pos);
+            g_logfile = nf;
+        }
+    }
 }
 
 /* Caller-driven flush. With per-line flush above this is redundant for

@@ -61,3 +61,10 @@ Thumbs.db
 
 # Local article drafts — not for repo
 docs/habr-article*.md
+
+# Local-only working files: anything matching *.local.* never goes to git.
+# Use this suffix for drafts, scratch notes, dev journals, personal todo
+# lists. The DEVLOG below uses it too.
+*.local.md
+*.local.txt
+DEVLOG.local.md

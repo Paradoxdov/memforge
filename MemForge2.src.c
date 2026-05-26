@@ -72,7 +72,12 @@ extern UINT32 g_base_freq_mhz;   /* base (max non-turbo) freq from MSR_PLATFORM_
 
 /* ---------- Hardware identification (SMBIOS-derived) ---------- */
 #define HW_STR  80
-#define MAX_DIMMS 16
+/* Cap on DIMM slots we track. Consumer desktops have 2-4 slots, workstation
+   boards 4-8, dual-socket servers commonly 24 (Dell R730 etc.), and 4-socket
+   blade systems / HPE Superdome ranges 48+. 32 covers everything up to and
+   including a fully-populated dual-socket DDR5 Xeon (24 slots) plus headroom.
+   Adds ~8 KB of static storage which is negligible in a UEFI app. */
+#define MAX_DIMMS 32
 typedef struct {
     CHAR8  locator[24];
     CHAR8  manufacturer[24];
@@ -5133,12 +5138,39 @@ static void parse_smbios_table(VOID *table_base, UINTN max_size, UINT16 num_stru
                             smbios_get_str_bounded(h, raw[4], end));
             smbios_copy_str(g_sys_model,  sizeof(g_sys_model),
                             smbios_get_str_bounded(h, raw[5], end));
-        } else if (h->type == 17 && h->length >= 0x16 && g_dimm_count < MAX_DIMMS) {
+        } else if (h->type == 17 && h->length >= 0x16) {
+            if (g_dimm_count >= MAX_DIMMS) {
+                /* Server with > MAX_DIMMS sticks — log once at the boundary
+                   so the operator notices the truncation instead of silently
+                   seeing only the first N DIMMs and a wrong total. */
+                static int warned_overflow = 0;
+                if (!warned_overflow) {
+                    CHAR16 wb[160];
+                    SPrint(wb, sizeof(wb),
+                           L"[SMBIOS] ⚠ more than %d DIMMs present — "
+                           L"only first %d tracked (rebuild with larger MAX_DIMMS)",
+                           MAX_DIMMS, MAX_DIMMS);
+                    log_line(wb);
+                    warned_overflow = 1;
+                }
+            } else {
             UINT16 size_field = *(const UINT16 *)(raw + 0x0C);
-            if (size_field != 0) {
+            if (size_field != 0 && size_field != 0xFFFF) {
                 dimm_info_t *d = &g_dimms[g_dimm_count];
                 UINT32 size_mb;
-                if (size_field == 0xFFFF && h->length >= 0x20)
+                /* SMBIOS Type 17 Size field encoding (DMTF SMBIOS spec):
+                     0x0000  no module installed
+                     0xFFFF  unknown (skipped above)
+                     0x7FFF  marker: real size is in Extended Size at 0x1C
+                             (used for modules > 32 GB — e.g. 64 / 128 / 256 GB
+                             RDIMMs on Xeon SP / EPYC / Dell R730+ servers)
+                     bit 15  = 1: size in KB (legacy small modules)
+                     otherwise: size in MB directly
+                   Earlier code triggered Extended Size only on 0xFFFF, which
+                   silently halved every >32 GB stick to 32 GB. Field-report
+                   from a Dell R730 with 18 × 64 GB DDR4: tool reported 512 GB
+                   instead of 1152 GB (combined with MAX_DIMMS=16 cap). */
+                if (size_field == 0x7FFF && h->length >= 0x20)
                     size_mb = *(const UINT32 *)(raw + 0x1C);
                 else if (size_field & 0x8000)
                     size_mb = (size_field & 0x7FFF) / 1024;
@@ -5167,6 +5199,7 @@ static void parse_smbios_table(VOID *table_base, UINTN max_size, UINT16 num_stru
                 g_total_ram_mb += d->size_mb;
                 g_dimm_count++;
             }
+            }   /* closes 'else' of g_dimm_count < MAX_DIMMS check */
         } else if (h->type == 20 && h->length >= 0x13 && g_dimm_map_count < MAX_DIMM_MAP) {
             /* Type 20 = Memory Device Mapped Address. Maps a physical address
                range to one Type 17 DIMM. Fields (DSP0134 §7.21):

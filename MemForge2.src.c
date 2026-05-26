@@ -836,7 +836,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.8";
+    CHAR16 *title = L"MEMFORGE v0.4.9";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1179,9 +1179,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.8   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.9   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.8   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.9   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1191,8 +1191,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.8   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.8   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.9   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.9   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1200,16 +1200,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.8  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.8  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.9  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.9  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.8 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.8 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.9 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.9 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -7733,8 +7733,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.8 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.8 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.9 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.9 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9508,7 +9508,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.8 init ===");
+    log_line(L"=== MemForge2 v0.4.9 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9648,12 +9648,26 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             CHAR16 lb[260];
             SPrint(lb, sizeof(lb),
                    L"[TEMP] ⚠ Baseline CPU temperature is %d°C at IDLE — "
-                   L"AUTO-SKIPPING heavy parallel-burst kernels (AVX2*, "
-                   L"VRM Square-Wave, Thermal Soak, BW Soak) to avoid "
-                   L"thermal halt. Pattern tests still run. Override with "
-                   L"IgnoreThermalGuard=1 in quantai.ini or fix the cooling.",
+                   L"thermal guard ACTIVE. Auto-skipping heavy parallel-"
+                   L"burst kernels (AVX2*, VRM Square-Wave, Thermal Soak, "
+                   L"BW Soak), AND capping to single-core (BSP only) for "
+                   L"remaining tests. Pattern tests still execute fully "
+                   L"but on 1 core — no parallel VRM load, no thermal "
+                   L"halt. Override with IgnoreThermalGuard=1 in "
+                   L"quantai.ini or fix the cooling.",
                    t0);
             log_line(lb);
+            /* The skip-list above doesn't cover TRRespass / Cache-Eviction /
+               Stride BW which ALSO generate enough multi-core VRM load to
+               trip a budget board. Cleaner solution: cap to single-core
+               instead of trying to enumerate every "heavy" kernel. On
+               1 core even AVX2 burst caps at ~30W (well within any TDP),
+               so VRM stays safe regardless of test. */
+            if (g_n_enabled > 1) {
+                g_n_enabled = 1;
+                log_line(L"[TEMP] thermal guard: g_n_enabled clamped to 1 — "
+                         L"all tests will run on BSP only");
+            }
         } else if (t0 >= 75) {
             CHAR16 lb[200];
             SPrint(lb, sizeof(lb),

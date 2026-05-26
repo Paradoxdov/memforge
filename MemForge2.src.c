@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.12";
+    CHAR16 *title = L"MEMFORGE v0.4.13";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1182,9 +1182,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.12   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.13   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.12   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.13   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1194,8 +1194,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.12   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.12   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.13   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.13   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1203,16 +1203,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.12  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.12  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.13  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.13  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.12 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.12 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.13 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.13 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -7768,8 +7768,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.12 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.12 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.13 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.13 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9543,7 +9543,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.12 init ===");
+    log_line(L"=== MemForge2 v0.4.13 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9678,64 +9678,36 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         if (g_cpu_vendor == CPU_AMD && g_has_thermal) {
             t0 = amd_thermal_sample();
         }
-        /* HARD-STOP at 100°C+. If baseline idle is already at-or-past
-           Tjmax, running ANY test (even single-core) will push the CPU
-           past thermal-shutdown threshold. Refuse to proceed. User must
-           either fix cooling or explicitly override with
-           IgnoreThermalGuard=1. v0.4.12 — added after a field report
-           saw 118°C live reading during a test (CPU was still running
-           but heavily throttling; user manually power-cycled). */
-        if (t0 >= 100 && !g_cfg_ignore_thermal_guard) {
-            CHAR16 lb[280];
-            SPrint(lb, sizeof(lb),
-                   L"[TEMP] ⚠⚠ CRITICAL: baseline CPU temperature is "
-                   L"%d°C at IDLE — at or PAST Tjmax. Running tests would "
-                   L"push the CPU into hard thermal shutdown. NOT starting. "
-                   L"Cross-check with HWiNFO64 in Windows: if it also "
-                   L"shows 100+°C, your cooling is broken (reseat heatsink, "
-                   L"replace thermal paste, check fans). If Windows shows "
-                   L"<70°C, the SMN reading on this board is unreliable — "
-                   L"set IgnoreThermalGuard=1 in quantai.ini to bypass.",
-                   t0);
-            log_line(lb);
-            /* Mark emergency. main_menu_wait checks this before allowing
-               the user to launch tests. Verdict screen still accessible. */
-            g_thermal_emergency = 1;
-            g_thermal_guard_skip_heavy = 1;
-            if (g_n_enabled > 1) g_n_enabled = 1;
-        } else
-        /* Threshold raised from 85 to 95°C in v0.4.11.
-           Original 85°C was set when we thought hangs were thermal — but
-           v0.4.10 found the actual cause was an Intel-only MSR read in
-           ap_yield. With THAT fixed, AMD systems can safely run full
-           multi-core load even with elevated idle temps. 95°C is real-
-           world panic territory (close to Ryzen Tjmax ~95-100°C) where
-           full 12-core AVX2 burst genuinely would push past safe limits.
-           User can still override with IgnoreThermalGuard=1. */
-        if (t0 >= 95 && !g_cfg_ignore_thermal_guard) {
-            g_thermal_guard_skip_heavy = 1;
+        /* v0.4.13 — REVERTED all thermal-guard auto-skip / cap / hard-
+           stop logic. Field report from a user on a NEW system with
+           verified-good cooling: SMN read shows Tctl=93°C at IDLE and
+           jumps to 118°C under load. Real idle temp on that build is
+           ~43°C per Windows HWiNFO64 cross-check — meaning the k10temp-
+           style decode (raw>>21, /8 = °C) has an undocumented +~50°C
+           offset on Ryzen 5 4500 (Renoir desktop) on at least some
+           ASUS B-series boards. Linux k10temp table only knows about
+           Ryzen 1700X/1800X (+20°C) and Threadripper (+27°C); Renoir
+           desktop SKUs aren't tabulated, so we (like Linux) assumed
+           offset=0. That assumption is wrong for this SKU.
+
+           Since the MSR-bug fix in v0.4.10 (Intel-only IA32_THERM_STATUS
+           in ap_yield) was the actual cause of the original hangs, the
+           thermal guard logic isn't needed and was misfiring on bogus
+           sensor data. Just log the reading informationally and proceed.
+
+           Users with genuinely-overheating systems will still see the
+           warning + a moving live-temp log — they can decide whether
+           to abort. Users with bogus-sensor systems just get a warning
+           they can ignore. No more auto-skip or hard-stop based on
+           sensor data we can't trust per-SKU. */
+        if (t0 >= 90) {
             CHAR16 lb[260];
             SPrint(lb, sizeof(lb),
-                   L"[TEMP] ⚠ Baseline CPU temperature is %d°C at IDLE — "
-                   L"DANGEROUSLY close to Tjmax. Thermal guard ACTIVE: "
-                   L"skipping heavy-burst kernels AND capping to single-"
-                   L"core. Cooling system has a real problem. Override "
-                   L"with IgnoreThermalGuard=1 in quantai.ini.",
-                   t0);
-            log_line(lb);
-            if (g_n_enabled > 1) {
-                g_n_enabled = 1;
-                log_line(L"[TEMP] thermal guard: g_n_enabled clamped to 1 — "
-                         L"all tests will run on BSP only");
-            }
-        } else if (t0 >= 85) {
-            CHAR16 lb[220];
-            SPrint(lb, sizeof(lb),
-                   L"[TEMP] Baseline CPU temperature %d°C at IDLE — high "
-                   L"but within safe envelope (Tjmax ~95-100°C on most "
-                   L"modern x86). Tests will run at full intensity. If "
-                   L"the system halts mid-test, set IgnoreThermalGuard=0 "
-                   L"and try MaxCores=4 as a workaround.",
+                   L"[TEMP] CPU sensor reads %d°C at idle. If your cooling "
+                   L"is normal, this is likely an undocumented SMN Tctl "
+                   L"offset on this Ryzen SKU (k10temp doesn't know about "
+                   L"every model). Cross-check with HWiNFO64 in Windows. "
+                   L"Tests proceeding at full intensity regardless.",
                    t0);
             log_line(lb);
         } else if (t0 >= 75) {

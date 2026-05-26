@@ -177,7 +177,7 @@ EnableAVX=1
 ;MarathonHours=0    ; 0 = off, 1..24 = run for N hours
 
 [Meta]
-Version=0.4.12
+Version=0.4.13
 Language=en         ; "ru" or "en"
 
 [Display]

@@ -4309,25 +4309,52 @@ static void hist_save_and_diff(UINT64 total_ms) {
         }
         INT64 d_secs = cur.run_epoch_s - g_hist_prev.run_epoch_s;
         INT32 d_days = (INT32)(d_secs / 86400LL);
+
+        /* gnu-efi SPrint doesn't understand %+d (signed-with-mandatory-sign).
+           Output literal "?d" instead of the value. Hand-format the sign
+           character and absolute value, insert via %c%d. */
+        CHAR16 sgn_err  = d_err  >= 0 ? L'+' : L'-';
+        CHAR16 sgn_temp = d_temp >= 0 ? L'+' : L'-';
+        CHAR16 sgn_bw   = d_bw   >= 0 ? L'+' : L'-';
+        UINT32 abs_err  = d_err  >= 0 ? (UINT32)d_err  : (UINT32)(-d_err);
+        UINT32 abs_temp = d_temp >= 0 ? (UINT32)d_temp : (UINT32)(-d_temp);
+        UINT32 abs_bw   = d_bw   >= 0 ? (UINT32)d_bw   : (UINT32)(-d_bw);
         SPrint(lb, sizeof(lb),
-               L"[HIST] Delta vs prev (~%d day(s) ago): errors %+d, "
-               L"temp %+d°C, BW peak %+d%%",
-               d_days, d_err, d_temp, d_bw);
+               L"[HIST] Delta vs prev (~%d day(s) ago): errors %c%d, "
+               L"temp %c%d°C, BW peak %c%d%%",
+               d_days,
+               sgn_err,  abs_err,
+               sgn_temp, abs_temp,
+               sgn_bw,   abs_bw);
         log_line(lb);
-        /* Loud warnings on regressions. */
+
+        /* Loud warnings on regressions. But: skip thermal/BW comparisons if
+           the previous run was shorter than 60 seconds — peak temp on a
+           7-second smoke test is meaningless (never reached steady-state)
+           and triggering "⚠ temp rose 26°C" against a cold-start baseline
+           is a false positive. Field report from a Habr commenter
+           (ASRock B760M, igrblkv) where the previous run was only 7 sec. */
+        int prev_long_enough = g_hist_prev.total_time_s >= 60;
+        if (!prev_long_enough) {
+            SPrint(lb, sizeof(lb),
+                   L"[HIST] previous run was only %d s — skipping thermal/BW "
+                   L"delta warnings (need ≥60s for meaningful peak comparison)",
+                   g_hist_prev.total_time_s);
+            log_line(lb);
+        }
         if (d_err > 0) {
             SPrint(lb, sizeof(lb),
                    L"[HIST] ⚠ REGRESSION: %d new errors since last run",
                    d_err);
             log_line(lb);
         }
-        if (d_temp >= 5) {
+        if (d_temp >= 5 && prev_long_enough) {
             SPrint(lb, sizeof(lb),
                    L"[HIST] ⚠ temp rose %d°C vs last run — check airflow/paste",
                    d_temp);
             log_line(lb);
         }
-        if (d_bw <= -5) {
+        if (d_bw <= -5 && prev_long_enough) {
             SPrint(lb, sizeof(lb),
                    L"[HIST] ⚠ BW dropped %d%% vs last run — possible degradation",
                    -d_bw);
@@ -5496,7 +5523,18 @@ static void parse_quantai_ini(void) {
         /* trim trailing whitespace from key */
         CHAR8 *kend = eq - 1;
         while (kend > key && (*kend == ' ' || *kend == '\t')) { *kend = 0; kend--; }
+        /* trim leading whitespace from value */
         while (*val == ' ' || *val == '\t') val++;
+        /* CUT value at first whitespace, ';' or '#' — strips inline comments
+           like "Language=ru   ; ru or en" so string-compare keys (Language=)
+           match cleanly. Numeric keys already get this for free because
+           ini_parse_uint stops at first non-digit. Without this strip the
+           parser silently dropped Language=ru in our own default file —
+           every key with an inline comment was unreachable from INI. */
+        CHAR8 *vend = val;
+        while (*vend && *vend != ' ' && *vend != '\t'
+                     && *vend != ';' && *vend != '#') vend++;
+        *vend = 0;
 
         if (ini_strieq(section, "Meta") && ini_strieq(key, "Language")) {
             if (ini_strieq(val, "en")) g_lang = 1;
@@ -8038,14 +8076,40 @@ static void write_json_report(UINT64 total_ms) {
 
     for (UINT32 i = 0; i < g_dimm_count; i++) {
         dimm_info_t *d = &g_dimms[i];
+        /* gnu-efi's SPrint promotes UINT8 to UINTN and %02X then prints all
+           8 hex chars instead of 2 — producing garbage like
+           "serial":"0000006F00000027000000BF00000000" and
+           "smbus_addr":"0x00000050". Hand-format the hex bytes into ASCII
+           buffers and insert via %a (CHAR8*). Same workaround already used
+           in the [SPD] log line — just was never applied here. */
+        static const CHAR8 hex[] = "0123456789ABCDEF";
+        #define HX2(out, v) do { (out)[0] = hex[((v) >> 4) & 0xF]; \
+                                  (out)[1] = hex[(v) & 0xF]; \
+                                  (out)[2] = 0; } while (0)
+        CHAR8 s_addr[3], s_year[3], s_jcode[3];
+        CHAR8 s_ser[9];
+        HX2(s_addr,  d->spd_addr);
+        HX2(s_year,  d->spd_mfg_year);
+        HX2(s_jcode, d->spd_jedec_code);
+        s_ser[0] = hex[(d->spd_serial[0] >> 4) & 0xF];
+        s_ser[1] = hex[ d->spd_serial[0]       & 0xF];
+        s_ser[2] = hex[(d->spd_serial[1] >> 4) & 0xF];
+        s_ser[3] = hex[ d->spd_serial[1]       & 0xF];
+        s_ser[4] = hex[(d->spd_serial[2] >> 4) & 0xF];
+        s_ser[5] = hex[ d->spd_serial[2]       & 0xF];
+        s_ser[6] = hex[(d->spd_serial[3] >> 4) & 0xF];
+        s_ser[7] = hex[ d->spd_serial[3]       & 0xF];
+        s_ser[8] = 0;
+        #undef HX2
+
         SPrint(buf, sizeof(buf),
             L"%a\r\n      {\"slot\":\"%a\",\"size_mb\":%d,\"manufacturer\":\"%a\","
             L"\"part\":\"%a\",\"type\":\"%s\",\"speed_mt\":%d,\"configured_speed_mt\":%d,"
             L"\"xmp_active\":%a,"
             L"\"organization\":{\"device_width\":%d,\"bus_width\":%d,\"ranks\":%d},"
-            L"\"spd\":{\"present\":%a,\"smbus_addr\":\"0x%02X\","
-            L"\"serial\":\"%02X%02X%02X%02X\",\"mfg_year\":\"20%02X\",\"mfg_week\":%d,"
-            L"\"jedec_bank\":%d,\"jedec_code\":\"0x%02X\","
+            L"\"spd\":{\"present\":%a,\"smbus_addr\":\"0x%a\","
+            L"\"serial\":\"%a\",\"mfg_year\":\"20%a\",\"mfg_week\":%d,"
+            L"\"jedec_bank\":%d,\"jedec_code\":\"0x%a\","
             L"\"timings\":{\"tCL\":%d,\"tRCD\":%d,\"tRP\":%d,\"tRAS\":%d,"
             L"\"tRFC_ns\":%d,\"tCK_ps\":%d}}}",
             (i > 0) ? "," : "",
@@ -8055,11 +8119,9 @@ static void write_json_report(UINT64 total_ms) {
             (i < MAX_DIMMS && g_xmp_dimm_flagged[i]) ? "true" : "false",
             d->spd_device_width, d->spd_bus_width, d->spd_ranks,
             d->spd_present ? "true" : "false",
-            d->spd_addr,
-            d->spd_serial[0], d->spd_serial[1],
-            d->spd_serial[2], d->spd_serial[3],
-            d->spd_mfg_year, d->spd_mfg_week,
-            d->spd_jedec_bank, d->spd_jedec_code,
+            s_addr,
+            s_ser, s_year, d->spd_mfg_week,
+            d->spd_jedec_bank, s_jcode,
             d->spd_tCL, d->spd_tRCD, d->spd_tRP, d->spd_tRAS,
             d->spd_tRFC_ns, d->spd_tCK_ps);
         json_write_chunk(jf, buf);

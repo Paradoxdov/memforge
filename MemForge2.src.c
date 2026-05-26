@@ -827,7 +827,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.1";
+    CHAR16 *title = L"MEMFORGE v0.4.2";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1170,9 +1170,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.1   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.2   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.1   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.2   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1182,8 +1182,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.1   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.1   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.2   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.2   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1191,16 +1191,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.1  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.1  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.2  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.2  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.1 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.1 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.2 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.2 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -3871,13 +3871,24 @@ static void detect_cpu_features(void) {
         g_has_thermal = (a & 1) != 0;
     }
 
-    if (g_has_thermal) {
+    if (g_has_thermal && g_cpu_vendor == CPU_INTEL) {
         /* TjMax is the temperature threshold the digital sensor measures
            below — bits 23:16 of MSR_TEMPERATURE_TARGET. Typical 100°C
-           desktop / 105°C mobile. INTEL-ONLY MSR (0x1A2). */
+           desktop / 105°C mobile. INTEL-ONLY MSR (0x1A2).
+           Note: amd_thermal_probe() flips g_has_thermal back to 1 when SMN
+           is up, so we MUST gate by vendor here — otherwise reading 0x1A2
+           on AMD triggers #GP and freezes the tester at init. Field-reported
+           hang on a Habr user's AMD machine (v0.4.1) traced to exactly this. */
         UINT64 tt = rdmsr_safe(MSR_TEMPERATURE_TARGET);
         g_tj_max = (UINT32)((tt >> 16) & 0xFF);
         if (g_tj_max == 0 || g_tj_max > 150) g_tj_max = 100;  /* sane fallback */
+    } else if (g_has_thermal && g_cpu_vendor == CPU_AMD) {
+        /* AMD: no MSR_TEMPERATURE_TARGET equivalent. Tctl is already raw
+           degrees from SMN, no offset needed for display. Set a reasonable
+           fallback TjMax so any code that compares against it doesn't
+           treat 0 as "thermal headroom unknown". Ryzen typical Tjmax 95°C
+           (consumer) / 105°C (server EPYC), pick the middle. */
+        g_tj_max = 100;
     }
     /* Base (max non-turbo) frequency from MSR_PLATFORM_INFO bits 15:8.
        INTEL-ONLY MSR (0xCE). On AMD it does not exist — earlier (pre-fix)
@@ -7564,8 +7575,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.1 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.1 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.2 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.2 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9339,7 +9350,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.1 init ===");
+    log_line(L"=== MemForge2 v0.4.2 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the

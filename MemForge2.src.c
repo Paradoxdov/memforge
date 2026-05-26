@@ -405,6 +405,9 @@ static int    g_cfg_enable_avx    = 1;     /* override the AVX2 test */
    Override with IgnoreThermalGuard=1 in quantai.ini. */
 static int    g_thermal_guard_skip_heavy = 0;
 static int    g_cfg_ignore_thermal_guard = 0;
+/* Hard-stop flag: baseline temp was >=100°C at init. main_menu_wait
+   checks this before launching tests. */
+static int    g_thermal_emergency = 0;
 static int    g_cfg_multipass     = 1;     /* if 1, rotate buffer across regions */
 static int    g_cfg_force_blt     = 0;     /* if 1, never use direct framebuffer */
 static int    g_cfg_enable_aa      = 0;     /* if 1, enable AA + direct-fb path */
@@ -836,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.11";
+    CHAR16 *title = L"MEMFORGE v0.4.12";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1179,9 +1182,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.11   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.12   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.11   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.12   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1191,8 +1194,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.11   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.11   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.12   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.12   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1200,16 +1203,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.11  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.11  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.12  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.12  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.11 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.11 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.12 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.12 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -7765,8 +7768,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.11 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.11 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.12 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.12 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9540,7 +9543,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.11 init ===");
+    log_line(L"=== MemForge2 v0.4.12 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9675,6 +9678,32 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         if (g_cpu_vendor == CPU_AMD && g_has_thermal) {
             t0 = amd_thermal_sample();
         }
+        /* HARD-STOP at 100°C+. If baseline idle is already at-or-past
+           Tjmax, running ANY test (even single-core) will push the CPU
+           past thermal-shutdown threshold. Refuse to proceed. User must
+           either fix cooling or explicitly override with
+           IgnoreThermalGuard=1. v0.4.12 — added after a field report
+           saw 118°C live reading during a test (CPU was still running
+           but heavily throttling; user manually power-cycled). */
+        if (t0 >= 100 && !g_cfg_ignore_thermal_guard) {
+            CHAR16 lb[280];
+            SPrint(lb, sizeof(lb),
+                   L"[TEMP] ⚠⚠ CRITICAL: baseline CPU temperature is "
+                   L"%d°C at IDLE — at or PAST Tjmax. Running tests would "
+                   L"push the CPU into hard thermal shutdown. NOT starting. "
+                   L"Cross-check with HWiNFO64 in Windows: if it also "
+                   L"shows 100+°C, your cooling is broken (reseat heatsink, "
+                   L"replace thermal paste, check fans). If Windows shows "
+                   L"<70°C, the SMN reading on this board is unreliable — "
+                   L"set IgnoreThermalGuard=1 in quantai.ini to bypass.",
+                   t0);
+            log_line(lb);
+            /* Mark emergency. main_menu_wait checks this before allowing
+               the user to launch tests. Verdict screen still accessible. */
+            g_thermal_emergency = 1;
+            g_thermal_guard_skip_heavy = 1;
+            if (g_n_enabled > 1) g_n_enabled = 1;
+        } else
         /* Threshold raised from 85 to 95°C in v0.4.11.
            Original 85°C was set when we thought hangs were thermal — but
            v0.4.10 found the actual cause was an Intel-only MSR read in
@@ -9835,6 +9864,61 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         flush_log_now();
         if (!main_menu_wait()) {
             log_line(L"User chose reboot from menu");
+            reboot_requested = 1;
+            break;
+        }
+        /* Thermal emergency check (v0.4.12). If baseline temp was 100°C+
+           at init, refuse to start tests no matter what the user pressed.
+           Display a screen explaining why and force them to reboot. */
+        if (g_thermal_emergency) {
+            log_line(L"[TEMP] User tried to start tests but thermal emergency "
+                     L"is active — refusing.");
+            cls();
+            UINTN cy = g_h / 3;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"⚠ ОПАСНАЯ ТЕМПЕРАТУРА CPU",
+                  L"⚠ DANGEROUS CPU TEMPERATURE"),
+                COL_FAIL);
+            cy += g_char_h * 2;
+            CHAR16 ln[260];
+            SPrint(ln, sizeof(ln),
+                T(L"  CPU sensor показал >= 100°C на старте.",
+                  L"  CPU sensor reads >= 100°C at idle."));
+            gfx_draw_str_color(g_pad, cy, ln, COL_FG); cy += g_char_h;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  Запуск тестов отменён чтобы не перегреть CPU.",
+                  L"  Tests refused to avoid further overheating."),
+                COL_FG); cy += g_char_h * 2;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  Что делать:",
+                  L"  What to do:"),
+                COL_ACCENT_HI); cy += g_char_h;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  1. Проверить охлаждение (термопаста, вентилятор)",
+                  L"  1. Check cooling (thermal paste, fan)"),
+                COL_FG); cy += g_char_h;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  2. Кросс-проверить через HWiNFO64 в Windows",
+                  L"  2. Cross-check with HWiNFO64 in Windows"),
+                COL_FG); cy += g_char_h;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  3. Если temp в Windows нормальная — поставить",
+                  L"  3. If Windows shows normal temp, set"),
+                COL_FG); cy += g_char_h;
+            gfx_draw_str_color(g_pad, cy,
+                L"     IgnoreThermalGuard=1   в quantai.ini",
+                COL_FG); cy += g_char_h * 2;
+            gfx_draw_str_color(g_pad, cy,
+                T(L"  [ESC] перезагрузка",
+                  L"  [ESC] reboot"),
+                COL_ACCENT_HI);
+            drain_conin();
+            for (;;) {
+                EFI_INPUT_KEY k = {0,0};
+                if (wait_key_or_timer(&k, 200)) {
+                    if (k.ScanCode == SCAN_ESC) break;
+                }
+            }
             reboot_requested = 1;
             break;
         }

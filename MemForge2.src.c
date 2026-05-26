@@ -827,7 +827,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.3";
+    CHAR16 *title = L"MEMFORGE v0.4.4";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1170,9 +1170,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.3   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.4   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.3   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.4   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1182,8 +1182,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.3   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.3   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.4   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.4   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1191,16 +1191,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.3  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.3  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.4  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.4  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.3 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.3 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.4 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.4 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -5944,6 +5944,12 @@ static UINTN get_largest_free_pages(void) {
 /* ---------- AP entry ---------- */
 static void EFIAPI ap_entry(VOID *arg) {
     ap_arg_t *a = (ap_arg_t *)arg;
+    /* Diagnostic: BSP-side only, first test only. APs can't safely write
+       to the log (FAT FS not multi-thread-safe, and we'd hammer it 11x
+       per call on a 12-core box). BSP is core_idx==0 by convention. */
+    int diag = (a->core_idx == 0 && g_cur_test_idx == 0);
+    if (diag) log_line(L"[BSP] ap_entry: pre try_enable_avx_state");
+
     /* CR4 and XCR0 are per-core registers. The BSP enabled OSXSAVE for
        itself in detect_cpu_features(), but each AP must enable XSAVE state
        on its OWN core before running anything that emits VEX-encoded AVX2
@@ -5959,11 +5965,13 @@ static void EFIAPI ap_entry(VOID *arg) {
                    || a->kernel == KER_BW_SOAK)) {
         try_enable_avx_state();
     }
+    if (diag) log_line(L"[BSP] ap_entry: post avx_state, pre try_enable_max_perf");
     /* Each AP requests max P-state on ITS OWN core. IA32_HWP_REQUEST (0x774)
        is a per-logical-CPU MSR — writing it from the BSP only affects the
        BSP. Without this every AP would run our stress kernels at the base
        firmware-default ratio. Cheap: 4 MSR ops, hundreds of nanoseconds. */
     try_enable_max_perf();
+    if (diag) log_line(L"[BSP] ap_entry: post max_perf, entering kernel switch");
     a->errors = 0; a->bytes = 0; a->progress = 0;
     switch (a->kernel) {
         case KER_WALKING_ONES:   run_walking_ones(a);   break;
@@ -5989,6 +5997,7 @@ static void EFIAPI ap_entry(VOID *arg) {
         case KER_L3_STRESS:      run_l3_stress(a);      break;
         case KER_STRIDE_BW:      run_stride_bw(a);      break;
     }
+    if (diag) log_line(L"[BSP] ap_entry: kernel returned, marking done");
     /* Before signalling done=1, mark this core's live-activity fields as
        "no longer running". Without this, the LAST value sampled while the
        kernel was busy (often util_pct=99, freq_mhz=3700) stays in the
@@ -7595,8 +7604,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.3 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.3 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.4 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.4 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9370,7 +9379,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.3 init ===");
+    log_line(L"=== MemForge2 v0.4.4 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the

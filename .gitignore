@@ -68,3 +68,6 @@ docs/habr-article*.md
 *.local.md
 *.local.txt
 DEVLOG.local.md
+
+# linewatch state — per-session snapshot, never goes to git
+.linewatch-state

@@ -1,5 +1,5 @@
 /*
- * MemForge2 v0.4.28 — UEFI memory tester written from scratch.
+ * MemForge2 v0.4.29 — UEFI memory tester written from scratch.
  *
  * Latest release: https://github.com/Paradoxdov/memforge/releases
  * For per-version changes see git log / GitHub Releases page.
@@ -417,7 +417,7 @@ static int    g_cfg_buffer_cap_explicit = 0;  /* user set BufferMB in INI? */
    physically removing the others. Set via [Run] TestOnlyDimm=N. */
 static UINT32 g_cfg_test_only_dimm = 0;     /* 0 = all DIMMs (default) */
 
-/* v0.4.28 — auto-isolation state.
+/* v0.4.29 — auto-isolation state.
    When the post-test verdict detects "errors on multiple DIMMs, block-
    mapped Type 20" we offer the user [I] to automatically re-test each
    affected DIMM with TestOnlyDimm in turn, giving a definitive
@@ -856,7 +856,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.28";
+    CHAR16 *title = L"MEMFORGE v0.4.29";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -960,7 +960,7 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
-/* v0.4.28 — focused cards layout for small screens (g_h < 900).
+/* v0.4.29 — focused cards layout for small screens (g_h < 900).
    Instead of one full-width row per test (14 rows × ~40 px = 560 px,
    which on a 1024×768 screen eats 70% of vertical space and clips the
    core panel + footer), we draw:
@@ -1030,7 +1030,7 @@ static void compute_layout(UINTN n_tests) {
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
 
-    /* v0.4.28 — focused layout on small screens.
+    /* v0.4.29 — focused layout on small screens.
        On g_h<900 the per-test card list eats 60-70% of vertical space
        and clips the core panel / footer (YgrecK field report on 1024×768
        Radeon HD 4350). Replace with: 1-row strip of all test dots +
@@ -1244,9 +1244,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.28   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.29   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.28   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.29   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1256,8 +1256,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.28   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
-                 L"  MEMFORGE v0.4.28   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.29   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
+                 L"  MEMFORGE v0.4.29   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1265,16 +1265,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.28  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
-                 L"  MEMFORGE v0.4.28  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
+               T(L"  MEMFORGE v0.4.29  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
+                 L"  MEMFORGE v0.4.29  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.28 | %s | %s | прошло %02d:%02d",
-                 L" MEMFORGE v0.4.28 | %s | %s | elapsed %02d:%02d"),
+               T(L" MEMFORGE v0.4.29 | %s | %s | прошло %02d:%02d",
+                 L" MEMFORGE v0.4.29 | %s | %s | elapsed %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1800,7 +1800,7 @@ static int dominant_dimm_idx(void) {
     return best;
 }
 
-/* v0.4.28 — detect dual-channel interleave ambiguity.
+/* v0.4.29 — detect dual-channel interleave ambiguity.
    On consumer desktops with dual/quad-channel memory, the iMC interleaves
    addresses between channels at 64-byte (cache-line) granularity. A
    SINGLE bad chip on one stick produces errors that, when mapped through
@@ -1809,7 +1809,7 @@ static int dominant_dimm_idx(void) {
 
    Field report from a Habr user (Netac DDR4 kit): same stuck bit
    D[53] was reported 24 times, distributed as A2 (8) + B2 (11) + ? (5).
-   Pre-v0.4.28 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
+   Pre-v0.4.29 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
    physically it's likely ONE bad chip on one of A2/B2, NOT both.
 
    This helper returns the list of DIMM indices that each hold >=25% of
@@ -1855,7 +1855,7 @@ static UINTN distributed_dimm_indices(int *out_idx, UINTN cap) {
     return n;
 }
 
-/* v0.4.28 — Approach D: detect whether SMBIOS Type 20 reports REAL
+/* v0.4.29 — Approach D: detect whether SMBIOS Type 20 reports REAL
    cache-line interleave (overlapping address ranges across DIMMs) or
    BLOCK mapping (disjoint ranges, each DIMM owns its own physical
    region). PassMark forum & KIT paper both confirm that even though
@@ -1899,7 +1899,7 @@ static UINT8 type20_max_interleave_depth(void) {
     return m;
 }
 
-/* v0.4.28 — Approach A: bit-6 polarity analysis of error addresses.
+/* v0.4.29 — Approach A: bit-6 polarity analysis of error addresses.
    On most Intel/AMD consumer dual-channel desktops with DDR4/DDR5, the
    iMC's channel selector is physical address bit 6 (alternating 64-byte
    cache lines between channels). If all error records share the same
@@ -3838,7 +3838,7 @@ static int try_enable_avx_state(void) {
    logical CPU and not just the BSP. */
 static volatile UINT32 g_hwp_ok_count   = 0;
 static volatile UINT32 g_hwp_fail_count = 0;
-/* v0.4.28 — count APs that took the legacy PERF_CTL (0x199) path
+/* v0.4.29 — count APs that took the legacy PERF_CTL (0x199) path
    instead of HWP. Lets the [PERF] summary distinguish "HWP failed
    silently" from "this is pre-Skylake, we used the right legacy MSR". */
 static volatile UINT32 g_legacy_turbo_count = 0;
@@ -3980,7 +3980,7 @@ static UINT32 try_enable_max_perf(void) {
     }
     if (turbo_ratio > 0) {
         wrmsr_safe(0x199, ((UINT64)turbo_ratio) << 8);
-        /* v0.4.28 — bump the legacy-turbo counter so the per-run [PERF]
+        /* v0.4.29 — bump the legacy-turbo counter so the per-run [PERF]
            summary can honestly say "OK via legacy PERF_CTL on N cores"
            instead of leaving us with OK=0 FAIL=0 which looks like nothing
            was done. */
@@ -4861,8 +4861,16 @@ static void amd_thermal_probe(void) {
         /* Test SMN by reading 0x00059800 (Tctl). FFFFFFFF = no response. */
         UINT32 v = amd_smn_read(0x00059800);
         if (v == 0xFFFFFFFF || v == 0) continue;
-        UINT32 raw = v >> 21;          /* Tctl × 8 (per AMD PPR) */
-        UINT32 deg = raw / 8;
+        /* v0.4.29 — use the CORRECT decode (same as amd_thermal_sample):
+           apply 0x7FF mask AND bit-19 -49°C range adjust. Pre-v0.4.29
+           probe used the broken raw>>21/8 decode and would report 92°C
+           on Ryzen 9 7900X (real ~43°C) as "initial Tctl" in the log,
+           which then poisoned the run-wide peak temperature counter
+           and produced a false-positive throttling warning on the
+           verdict screen even on water-cooled CPUs. */
+        UINT32 raw = (v >> 21) & 0x7FF;
+        INT32  deg = (INT32)(raw / 8);
+        if (v & (1u << 19)) deg -= 49;
         if (deg < 1 || deg > 150) continue;   /* sanity */
         g_amd_smn_ready = 1;
         g_has_thermal   = 1;            /* enable thermal display, AMD-aware */
@@ -4878,7 +4886,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.28 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.29 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4886,7 +4894,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.28 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.29 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6506,7 +6514,7 @@ static test_def_t g_tests[] = {
 };
 #define N_TESTS (sizeof(g_tests) / sizeof(g_tests[0]))
 
-/* v0.4.28 — map a kernel enum (KER_*) to its position in g_tests[].
+/* v0.4.29 — map a kernel enum (KER_*) to its position in g_tests[].
    CRITICAL: do NOT index g_tests[] directly by a kernel_id_t value.
    The enum values do not match array positions (e.g., KER_AVX2_SUSTAINED
    = 12 maps to position 0 in g_tests because AVX2 Sustained is the
@@ -6658,7 +6666,7 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
-/* v0.4.28 — Forward decls for focused-mode helpers (defined below
+/* v0.4.29 — Forward decls for focused-mode helpers (defined below
    card_paint so they can share the same color-lookup logic). */
 static void card_paint_full(UINTN i);
 static void card_strip_paint(UINTN i);
@@ -6772,7 +6780,7 @@ static void card_paint_full(UINTN i) {
     }
 }
 
-/* ---------- Focused-mode card painters (v0.4.28) ---------- */
+/* ---------- Focused-mode card painters (v0.4.29) ---------- */
 
 /* Paint the small status dot for test i in the top strip. The strip is
    one row tall and shows N evenly-spaced dots, one per test. The dot
@@ -6855,7 +6863,7 @@ static void card_focused_paint(UINTN i) {
     blt_fill(ix, row3_y, iw, row_h, COL_PANEL);
 
     /* Row 1: test name (left) + short description in dim color + index counter (right).
-       v0.4.28 — description lets non-expert user know what the test
+       v0.4.29 — description lets non-expert user know what the test
        actually checks (TRRespass / March-C- / Butterfly etc. are jargon). */
     say_at_px(ix + 4, row1_y, g_tests[i].name);
     UINTN name_chars = StrLen(g_tests[i].name);
@@ -7140,7 +7148,7 @@ static void core_cols_compute(core_cols_t *c) {
     if (slack >= 9 * cw + pad) { w_freq = 9 * cw; slack -= w_freq + pad; }
     /* Priority 4: Per-core MB/s — 6 chars */
     if (slack >= 6 * cw + pad) { w_mbs  = 6 * cw; slack -= w_mbs  + pad; }
-    /* v0.4.28 — "Смещ" (buffer-offset for this core's slice) column dropped
+    /* v0.4.29 — "Смещ" (buffer-offset for this core's slice) column dropped
        from the main test screen. It was a developer-debug field that nobody
        in the field could interpret; removing it frees ~9 chars to widen the
        activity bar. The offset is still in the log and the JSON. */
@@ -7506,8 +7514,8 @@ static void drain_conin(void) {
     }
 }
 
-/* v0.4.28 — countdown UX rework.
-   Pre-v0.4.28: ESC meant "skip the wait and start the test now" — which
+/* v0.4.29 — countdown UX rework.
+   Pre-v0.4.29: ESC meant "skip the wait and start the test now" — which
    completely contradicts the universal "ESC = cancel" convention. Users
    pressed ESC expecting "I don't want this test" and instead launched it.
 
@@ -7795,7 +7803,7 @@ static test_summary_t run_test_mc(UINTN test_idx) {
     if (test_idx == 0) log_line(L"[DISP] BSP returned from ap_entry slot 0");
 
     /* Once-per-run diagnostic: how many APs successfully bumped the
-       CPU into max P-state, by which mechanism. Pre-v0.4.28 this only
+       CPU into max P-state, by which mechanism. Pre-v0.4.29 this only
        counted the HWP path, so on Haswell/Ivy/Sandy (no HWP) the line
        read OK=0 FAIL=0 — making it look like nothing happened, even
        though the legacy PERF_CTL fallback was actually doing its job. */
@@ -8005,7 +8013,7 @@ static int verdict_describe_what_broke(CHAR16 *line1, UINTN cap1,
     return n;
 }
 
-/* ---------- v0.4.28 Auto-isolation feature ----------
+/* ---------- v0.4.29 Auto-isolation feature ----------
    When the post-test verdict detects "errors on 2+ DIMMs in block-mapped
    Type 20", we can definitively identify the bad stick(s) by re-running
    the failing test on each DIMM in turn with TestOnlyDimm, instead of
@@ -8013,7 +8021,7 @@ static int verdict_describe_what_broke(CHAR16 *line1, UINTN cap1,
    on real cache-line interleave, TestOnlyDimm doesn't physically isolate
    because the iMC still alternates between channels.                  */
 
-/* v0.4.28 — should auto-isolation kick in automatically?
+/* v0.4.29 — should auto-isolation kick in automatically?
    Same conditions as the [I] offer in render_simple_verdict, but checked
    from the main test loop right after tests complete so we can run
    isolation BEFORE showing the verdict and skip the "press [I] then wait"
@@ -8417,7 +8425,7 @@ static void render_isolation_verdict(void) {
 static void render_simple_verdict(UINT64 total_ms) {
     cls();
     verdict_kind_t v = compute_verdict_kind();
-    /* v0.4.28 — reset isolation offer; will be enabled below if applicable. */
+    /* v0.4.29 — reset isolation offer; will be enabled below if applicable. */
     g_iso_offer = 0;
     g_iso_dimm_n = 0;
 
@@ -8575,7 +8583,7 @@ static void render_simple_verdict(UINT64 total_ms) {
         UINTN dist_n = distributed_dimm_indices(dist_idx, MAX_DIMMS);
         int is_distributed = (dist_n >= 2);
 
-        /* v0.4.28 — Approach D + A: classify WHY errors are distributed.
+        /* v0.4.29 — Approach D + A: classify WHY errors are distributed.
              type20_overlap = 1 → ranges overlap (real cache-line interleave)
                                   → "ONE chip behind two labels"
              type20_overlap = 0, depth ≤ 1 → block mode (disjoint ranges,
@@ -8655,12 +8663,12 @@ static void render_simple_verdict(UINT64 total_ms) {
                 T(L"  это РЕАЛЬНО на разных физических плашках, обе дефектные.",
                   L"  on physically separate sticks; both are defective."),
                 COL_DIM); cy += cline + 6;
-            /* v0.4.28 — offer auto-isolation: re-test each DIMM in its own
+            /* v0.4.29 — offer auto-isolation: re-test each DIMM in its own
                physical address range to confirm WHICH ones are actually
                bad (vs symptom of one chip pretending to be two). Block-
                mapped Type 20 is the precondition — on real cache-line
                interleave TestOnlyDimm doesn't physically isolate.
-               v0.4.28 — only offer [I] if auto-isolation hasn't already
+               v0.4.29 — only offer [I] if auto-isolation hasn't already
                run (g_iso_results_n == 0). The normal flow now triggers
                isolation automatically right after the test loop, so the
                [I] offer here is only relevant when the user navigated
@@ -8866,7 +8874,7 @@ static void render_simple_verdict(UINT64 total_ms) {
     }
 
     /* Footer hint — same key handling as the technical summary, plus [D].
-       v0.4.28: [I] for auto-isolation when offered. */
+       v0.4.29: [I] for auto-isolation when offered. */
     UINTN foot_y = g_h - g_char_h - 8;
     blt_fill(0, foot_y - 4, g_w, g_char_h + 8, COL_PANEL_ALT);
     blt_fill(0, foot_y - 5, g_w, 1, COL_BORDER);
@@ -8895,8 +8903,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.28 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.28 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.29 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.29 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -8978,7 +8986,7 @@ static void render_summary(UINT64 total_ms) {
                 CHAR16 chip[64] = L"";
                 if (didx >= 0)
                     chip_label_for_bit((UINT32)didx, bp, chip, 64);
-                /* v0.4.28 — use SMBIOS Type 17 locator string ("DDR4-B2")
+                /* v0.4.29 — use SMBIOS Type 17 locator string ("DDR4-B2")
                    instead of array-index-based "DIMM%d" which had nothing
                    to do with the physical slot label the user sees. */
                 CHAR8 *loc = (didx >= 0 && g_dimms[didx].locator[0])
@@ -9079,7 +9087,7 @@ static void render_summary(UINT64 total_ms) {
         log_line(dimm_line);
         row++;
 
-        /* (3) 1-GB histogram — v0.4.28: short label on its own row, then
+        /* (3) 1-GB histogram — v0.4.29: short label on its own row, then
            entries wrapped across multiple rows so nothing falls off the
            right edge on a 1024-pixel screen (a 14-entry histogram is
            ~120 chars which doesn't fit any reasonable single line). */
@@ -9542,7 +9550,7 @@ static void write_json_report(UINT64 total_ms) {
         g_bw_trend_last_pct, g_bw_trend_degraded);
     json_write_chunk(jf, buf);
 
-    /* v0.4.28 — run-wide peaks. Lets an automated analyzer verify the
+    /* v0.4.29 — run-wide peaks. Lets an automated analyzer verify the
        CPU actually got loaded (without these the JSON had no way to
        answer "was the workload real or did the CPU idle?"). */
     UINT32 peak_bw_gbs_x10 = g_bw_mbps_peak ? (g_bw_mbps_peak * 10 / 1024) : 0;
@@ -10580,10 +10588,30 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
            [Display] Width=N Height=N in quantai.ini overrides the picked
            mode if user needs to force a specific resolution (e.g. firmware
            offers a broken mode that should be skipped). */
-        UINT32 best_w = 0, best_h = 0, best_mode = g_gop->Mode->Mode;
-        UINT64 best_px = 0;
+        /* v0.4.29 — robust mode picker with per-mode verification.
+           Field report (MSI B650 TOMAHAWK + BIOS 1.M3 on Ryzen 9 7900X):
+           our SetMode(3440x1440) was silently rejected by firmware which
+           stayed at default 800x600 — but Mode->Info still LIED that it
+           was at 3440x1440. The pre-v0.4.29 LATE check eventually caught
+           the mismatch and clamped g_w/g_h, but by then the splash and
+           main menu had already rendered as garbage onto an 800x600
+           framebuffer using 3440x1440 coordinates.
+
+           New approach: build a list of all candidate modes sorted by
+           pixel area (largest first). For each, try SetMode + verify that
+           the framebuffer size and PixelsPerScanLine actually match what
+           the mode claims. If they don't match — firmware silently
+           rejected the switch — skip and try the next-largest. Stop at
+           the first mode that activates honestly. */
+
         UINT32 n_modes = g_gop->Mode->MaxMode;
-        for (UINT32 m = 0; m < n_modes; m++) {
+        /* Cap to MAX_MODE_CAND to keep stack small; firmware rarely
+           exposes more than 20 modes anyway. */
+        #define MAX_MODE_CAND 32
+        UINT32 cand[MAX_MODE_CAND];
+        UINT64 cand_px[MAX_MODE_CAND];
+        UINTN  n_cand = 0;
+        for (UINT32 m = 0; m < n_modes && n_cand < MAX_MODE_CAND; m++) {
             EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
             UINTN info_sz = 0;
             EFI_STATUS qs = uefi_call_wrapper(g_gop->QueryMode, 4,
@@ -10592,74 +10620,121 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             UINT32 w = info->HorizontalResolution;
             UINT32 h = info->VerticalResolution;
             if (w == 0 || h == 0) continue;
-            /* INI override: if user specified exact Width/Height, take
-               only modes that match. */
             if (g_cfg_force_w && g_cfg_force_h) {
                 if (w != g_cfg_force_w || h != g_cfg_force_h) continue;
             }
-            UINT64 px = (UINT64)w * h;
-            if (px > best_px) {
-                best_w = w; best_h = h; best_mode = m; best_px = px;
+            cand[n_cand]    = m;
+            cand_px[n_cand] = (UINT64)w * h;
+            n_cand++;
+        }
+        /* Simple selection sort, largest pixel area first. */
+        for (UINTN i = 0; i < n_cand; i++) {
+            UINTN best = i;
+            for (UINTN j = i + 1; j < n_cand; j++) {
+                if (cand_px[j] > cand_px[best]) best = j;
+            }
+            if (best != i) {
+                UINT32 tm = cand[i]; cand[i] = cand[best]; cand[best] = tm;
+                UINT64 tp = cand_px[i]; cand_px[i] = cand_px[best]; cand_px[best] = tp;
             }
         }
-        if (best_px > 0 && best_mode != g_gop->Mode->Mode) {
-            uefi_call_wrapper(g_gop->SetMode, 2, g_gop, best_mode);
-        }
-        /* Some Intel iGPU firmwares (Gigabyte B760M / Dell OptiPlex etc.)
-           leave Mode->Info->PixelsPerScanLine stale immediately after
-           SetMode — it still reflects the previous mode's pitch until
-           the firmware processes the FIRST actual Blt call. Without this
-           "kick" the firmware-quirk check below reads a wrong (matching)
-           PPSL and never triggers, even though PPSL is in fact wrong. So
-           we force one tiny Blt to push firmware to settle Mode->Info. */
-        {
-            EFI_GRAPHICS_OUTPUT_BLT_PIXEL kick = {0, 0, 0, 0};
-            uefi_call_wrapper(g_gop->Blt, 10, g_gop, &kick, EfiBltVideoFill,
-                              0, 0, 0, 0, 1, 1, 0);
-        }
-        /* Re-query the mode info directly via QueryMode rather than reading
-           g_gop->Mode->Info, because the latter is firmware-cached and may
-           still hold stale data. QueryMode forces a fresh fetch. */
-        UINT32 picked = g_gop->Mode->Mode;
-        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = g_gop->Mode->Info;
-        UINTN info_sz = 0;
-        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *fresh = NULL;
-        if (uefi_call_wrapper(g_gop->QueryMode, 4, g_gop, picked,
-                              &info_sz, &fresh) == EFI_SUCCESS && fresh) {
-            info = fresh;
-        }
-        g_w = info->HorizontalResolution;
-        g_h = info->VerticalResolution;
 
-        /* CRITICAL firmware-quirk guard. Some Intel iGPU UEFIs report a
-           HIGHER resolution through HorizontalResolution/VerticalResolution
-           than what was actually allocated for the framebuffer — e.g.
-           claims 1600×900 but PixelsPerScanLine=1024 and FrameBufferSize
-           =3145728 = 1024×768×4. The monitor scales the smaller fb to its
-           native size; our app, trusting the larger numbers, lays out text
-           at coordinates that fall OUTSIDE the actual fb → those writes
-           silently disappear or land in firmware boot-logo memory.
+        /* Try modes in order; accept the first one that activates for real. */
+        UINT32 active_w = 0, active_h = 0;
+        UINT32 active_ppsl = 0;
+        UINT64 active_fbsz = 0;
+        for (UINTN i = 0; i < n_cand; i++) {
+            UINT32 m = cand[i];
+            EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
+            UINTN info_sz = 0;
+            if (uefi_call_wrapper(g_gop->QueryMode, 4, g_gop, m,
+                                  &info_sz, &info) != EFI_SUCCESS || !info)
+                continue;
+            UINT32 want_w = info->HorizontalResolution;
+            UINT32 want_h = info->VerticalResolution;
 
-           Cure: trust FBSize + PixelsPerScanLine over HorizontalResolution
-           / VerticalResolution when they disagree. Use the SMALLER values.
-           Monitor hardware-scaler still shows full screen, just stretched
-           slightly. Far better than half the UI being off-screen. */
-        UINT32 ppsl = info->PixelsPerScanLine;
-        UINT64 fbsz = g_gop->Mode->FrameBufferSize;
-        if (ppsl > 0 && fbsz > 0) {
-            UINT32 actual_w = (ppsl < g_w) ? ppsl : g_w;
-            UINT32 max_rows = (UINT32)(fbsz / 4 / ppsl);
-            UINT32 actual_h = (max_rows < g_h) ? max_rows : g_h;
-            if (actual_w < g_w || actual_h < g_h) {
-                CHAR16 lb[180];
+            /* Only SetMode if not already the active mode. */
+            if (m != g_gop->Mode->Mode) {
+                EFI_STATUS ss = uefi_call_wrapper(g_gop->SetMode, 2, g_gop, m);
+                if (EFI_ERROR(ss)) {
+                    CHAR16 lb[160];
+                    SPrint(lb, sizeof(lb),
+                           L"[GFX] mode[%d] %dx%d: SetMode failed (status=0x%lx), trying next",
+                           m, want_w, want_h, (UINT64)ss);
+                    log_line(lb);
+                    continue;
+                }
+            }
+            /* Force a tiny Blt — some Intel iGPU firmwares leave Mode->Info
+               stale until the first real Blt happens. */
+            {
+                EFI_GRAPHICS_OUTPUT_BLT_PIXEL kick = {0, 0, 0, 0};
+                uefi_call_wrapper(g_gop->Blt, 10, g_gop, &kick, EfiBltVideoFill,
+                                  0, 0, 0, 0, 1, 1, 0);
+            }
+            /* Verify the switch by checking FBSize / PPSL match the
+               requested mode. Firmware lies via Mode->Info but can't lie
+               via FBSize (it's the actual allocation size). */
+            UINT32 got_ppsl = g_gop->Mode->Info->PixelsPerScanLine;
+            UINT64 got_fbsz = g_gop->Mode->FrameBufferSize;
+            if (got_ppsl == 0 || got_fbsz == 0) {
+                CHAR16 lb[160];
                 SPrint(lb, sizeof(lb),
-                       L"[GFX] firmware-quirk: claimed %dx%d but fbsize/ppsl imply %dx%d — using smaller",
-                       (UINT32)g_w, (UINT32)g_h, actual_w, actual_h);
+                       L"[GFX] mode[%d] %dx%d: ppsl/fbsz are zero — accepting anyway",
+                       m, want_w, want_h);
                 log_line(lb);
-                g_w = actual_w;
-                g_h = actual_h;
+                active_w = want_w; active_h = want_h;
+                active_ppsl = got_ppsl; active_fbsz = got_fbsz;
+                break;
             }
+            UINT32 implied_max_h = (UINT32)(got_fbsz / 4 / got_ppsl);
+            /* Accept if the framebuffer can actually hold this mode (ppsl
+               >= want_w AND implied_max_h >= want_h). Allow some slack —
+               sometimes PPSL is slightly larger than width (alignment). */
+            if (got_ppsl >= want_w && implied_max_h >= want_h) {
+                active_w = want_w; active_h = want_h;
+                active_ppsl = got_ppsl; active_fbsz = got_fbsz;
+                break;
+            }
+            /* Firmware silently failed — fb too small for requested mode. */
+            CHAR16 lb[200];
+            SPrint(lb, sizeof(lb),
+                   L"[GFX] mode[%d] %dx%d: firmware silently rejected "
+                   L"(fbsz=%ld ppsl=%d implies max %dx%d), trying next",
+                   m, want_w, want_h, got_fbsz, got_ppsl, got_ppsl, implied_max_h);
+            log_line(lb);
         }
+
+        if (active_w == 0 || active_h == 0) {
+            /* Nothing accepted. Fall back to whatever Mode->Info currently
+               says — best effort. */
+            EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = g_gop->Mode->Info;
+            active_w = info->HorizontalResolution;
+            active_h = info->VerticalResolution;
+            active_ppsl = info->PixelsPerScanLine;
+            active_fbsz = g_gop->Mode->FrameBufferSize;
+            log_line(L"[GFX] WARN: no mode activated cleanly — using current "
+                     L"firmware values (display may be wrong)");
+        }
+
+        g_w = active_w;
+        g_h = active_h;
+        /* If PPSL is smaller than g_w (rare quirk), clamp g_w to PPSL
+           and g_h to what fits in fbsize. Same logic as the old LATE
+           check, but now applied per-mode. */
+        if (active_ppsl > 0 && active_fbsz > 0 && active_ppsl < g_w) {
+            UINT32 max_rows = (UINT32)(active_fbsz / 4 / active_ppsl);
+            CHAR16 lb[180];
+            SPrint(lb, sizeof(lb),
+                   L"[GFX] PPSL=%d < width=%d — clamping to %dx%d "
+                   L"(firmware pixel alignment quirk)",
+                   active_ppsl, (UINT32)g_w, active_ppsl,
+                   max_rows < g_h ? max_rows : (UINT32)g_h);
+            log_line(lb);
+            g_w = active_ppsl;
+            if (max_rows < g_h) g_h = max_rows;
+        }
+        #undef MAX_MODE_CAND
     }
 
     EFI_GUID mp_guid = EFI_MP_SERVICES_PROTOCOL_GUID;
@@ -10725,7 +10800,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.28 init ===");
+    log_line(L"=== MemForge2 v0.4.29 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -10770,7 +10845,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.28 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.29 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -10785,7 +10860,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.28 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.29 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core
@@ -11387,7 +11462,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             g_cards[i].errors = 0;
             card_paint(i);
 
-            /* v0.4.28 — countdown returns 0=start, 1=skip this test, 2=abort run */
+            /* v0.4.29 — countdown returns 0=start, 1=skip this test, 2=abort run */
             int cd_rc = countdown(2, i);
             if (cd_rc == 2) break;          /* Q → abort whole run */
             if (cd_rc == 1) {                /* ESC → skip this test */
@@ -11404,7 +11479,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 done_tests++;
                 continue;
             }
-            /* v0.4.28 — clear the countdown footer once the test starts.
+            /* v0.4.29 — clear the countdown footer once the test starts.
                The old "[N/14] Test starts in 2 sec ..." line would linger
                throughout the test run, taking up screen space without
                serving any purpose during the test itself. Replace with a
@@ -11430,8 +11505,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                per-test results to survive that. Cheap (1× per test, not
                1× per log line). */
             flush_log_now();
-            /* v0.4.28 — ACCUMULATE across marathon passes, do not OVERWRITE.
-               Pre-v0.4.28 the line was `g_summary[i] = r;` which kept only
+            /* v0.4.29 — ACCUMULATE across marathon passes, do not OVERWRITE.
+               Pre-v0.4.29 the line was `g_summary[i] = r;` which kept only
                the LAST pass's per-test result. On a 16-hour marathon with
                an intermittent error rate of 1 per pass, that meant the
                final summary table showed "errors: 0" because the most
@@ -11518,7 +11593,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         /* Persist this run's summary to NVRAM and log delta vs prev run.
            Lets a shop see across reboots whether the symptom reproduces. */
         hist_save_and_diff(total_ms);
-        /* v0.4.28 — auto-isolation: if errors are distributed across 2+
+        /* v0.4.29 — auto-isolation: if errors are distributed across 2+
            DIMMs on a block-mapped system, automatically run per-DIMM
            re-test BEFORE showing the verdict. No user key needed. The
            result screen becomes the verdict the user sees. */
@@ -11705,7 +11780,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                         /* Cyrillic ш/Ш = same physical key as I on RU layout */
                         k.UnicodeChar == 0x0448 || k.UnicodeChar == 0x0428)
                        && g_iso_offer) {
-                /* v0.4.28 — auto-isolation: re-test each affected DIMM with
+                /* v0.4.29 — auto-isolation: re-test each affected DIMM with
                    TestOnlyDimm, give a definitive REPLACE answer. */
                 do_auto_isolation();
                 render_isolation_verdict();

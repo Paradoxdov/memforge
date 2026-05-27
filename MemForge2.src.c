@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.16";
+    CHAR16 *title = L"MEMFORGE v0.4.17";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -943,6 +943,23 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
+/* v0.4.17 — focused cards layout for small screens (g_h < 900).
+   Instead of one full-width row per test (14 rows × ~40 px = 560 px,
+   which on a 1024×768 screen eats 70% of vertical space and clips the
+   core panel + footer), we draw:
+     1) a single STRIP row showing all N tests as small status dots
+        + an overall "5/14   ош:0" count.
+     2) a BIG FOCUSED CARD (3 rows tall) for the currently-running
+        test — name + time + progress bar + live metrics.
+   Total reservation: ~4 rows instead of 7-14. Layout scales identically
+   from 640×480 to 4K because it does NOT depend on N tests.
+   On g_h ≥ 900 the original per-test cards layout is kept (it gives
+   a better at-a-glance overview when there's room).                  */
+static int   g_focused_cards = 0;
+static UINTN g_strip_x, g_strip_y, g_strip_w, g_strip_h;
+static UINTN g_focus_x, g_focus_y, g_focus_w, g_focus_h;
+static UINTN g_focus_active_idx = (UINTN)-1; /* which test is in big card now */
+
 /* Per-core panel */
 static UINTN g_core_x, g_core_y, g_core_row_h, g_core_w;
 
@@ -995,6 +1012,32 @@ static void compute_layout(UINTN n_tests) {
     g_card_y = g_hdr_h + g_pad + g_char_h;
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
+
+    /* v0.4.17 — focused layout on small screens.
+       On g_h<900 the per-test card list eats 60-70% of vertical space
+       and clips the core panel / footer (YgrecK field report on 1024×768
+       Radeon HD 4350). Replace with: 1-row strip of all test dots +
+       3-row big card for the currently-running test. Fixed ~4 rows
+       regardless of N. On g_h≥900 we keep the original layout because
+       the per-test rows give a nicer at-a-glance view when there's room. */
+    g_focused_cards = (g_h < 900) ? 1 : 0;
+    UINTN cards_h;
+    UINTN cards_rows;
+    if (g_focused_cards) {
+        g_strip_x = g_card_x;
+        g_strip_y = g_card_y;
+        g_strip_w = g_card_w;
+        g_strip_h = g_char_h + 8;
+        g_focus_x = g_card_x;
+        g_focus_y = g_strip_y + g_strip_h + 6;
+        g_focus_w = g_card_w;
+        g_focus_h = 3 * g_char_h + 14;
+        cards_h = g_strip_h + 6 + g_focus_h + g_pad;
+        cards_rows = 0;        /* unused in focused mode */
+        g_card_cols = 1;       /* unused but keep consistent */
+        g_card_row_h = g_strip_h;
+        goto focused_done;
+    }
     /* Decide 1-col vs 2-col cards. Three thresholds:
          1. Tiny framebuffers (g_h < 700): always 2-col (Dell OptiPlex 800×600).
          2. n_tests is large AND the 1-col layout would push the cores panel
@@ -1044,9 +1087,11 @@ static void compute_layout(UINTN n_tests) {
             g_card_cols = 2;
         }
     }
-    UINTN cards_rows = (n_tests + g_card_cols - 1) / g_card_cols;
-    UINTN cards_h = g_card_row_h * cards_rows + g_pad;
+    cards_rows = (n_tests + g_card_cols - 1) / g_card_cols;
+    cards_h = g_card_row_h * cards_rows + g_pad;
 
+focused_done:
+    (void)cards_rows;          /* silence unused-warning in focused branch */
     /* Per-core panel below the cards. The number of visible cores and the
        rows-per-column are now driven by the same adaptive helpers used by
        the renderer (core_grid_shown / core_grid_cols), so the geometry the
@@ -1182,9 +1227,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.16   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.17   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.16   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.17   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1194,8 +1239,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.16   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.16   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.17   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.17   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1203,16 +1248,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.16  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.16  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.17  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.17  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.16 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.16 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.17 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.17 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -4668,7 +4713,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.16 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.17 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4676,7 +4721,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.16 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.17 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6428,10 +6473,39 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
+/* v0.4.17 — Forward decls for focused-mode helpers (defined below
+   card_paint so they can share the same color-lookup logic). */
+static void card_paint_full(UINTN i);
+static void card_strip_paint(UINTN i);
+static void card_focused_paint(UINTN i);
+static void card_focused_redraw(void);
+
 static void card_paint(UINTN i) {
     if (i >= N_TESTS) return;
     if (!g_show_cards) return;   /* short-screen mode: panel suppressed */
-    /* Position within the cards grid. With g_card_cols=1 it's just
+    if (g_focused_cards) {
+        /* Focused mode: every paint updates the strip dot. If this test
+           is currently running, also repaint the big focused card. When
+           the active test changes (i becomes RUNNING and differs from
+           g_focus_active_idx), clear the big card area first so old
+           name/bar pixels don't leak through. */
+        card_strip_paint(i);
+        if (g_cards[i].state == CARD_RUNNING) {
+            if (g_focus_active_idx != i) {
+                g_focus_active_idx = i;
+                blt_fill(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_PANEL);
+                box_outline(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_BORDER);
+            }
+            card_focused_paint(i);
+        }
+        return;
+    }
+    card_paint_full(i);
+}
+
+static void card_paint_full(UINTN i) {
+    /* Original full-row card painter — used on g_h≥900 screens.
+       Position within the cards grid. With g_card_cols=1 it's just
        (col=0, row=i) — backward compatible. With g_card_cols=2 we lay out
        tests 1..rows in left col, rows+1..N in right col. */
     UINTN rows_per_col = (N_TESTS + g_card_cols - 1) / g_card_cols;
@@ -6513,6 +6587,132 @@ static void card_paint(UINTN i) {
     }
 }
 
+/* ---------- Focused-mode card painters (v0.4.17) ---------- */
+
+/* Paint the small status dot for test i in the top strip. The strip is
+   one row tall and shows N evenly-spaced dots, one per test. The dot
+   color reflects the test's CARD_state. The strip is rendered as a
+   single bordered panel, so individual dots can be repainted in-place
+   without redrawing the whole strip. */
+static void card_strip_paint(UINTN i) {
+    if (!g_focused_cards) return;
+    /* Calculate dot position: divide strip horizontally into N_TESTS
+       equal slots, dot in the middle of each slot. Leave room on the
+       right for the "5/14 ош:0" counter. */
+    UINTN right_text_chars = 18;   /* "  5/14   ош:0  " */
+    UINTN avail_w = g_strip_w - right_text_chars * g_char_w - 8;
+    if (avail_w < 40) avail_w = 40;
+    UINTN slot_w  = avail_w / N_TESTS;
+    if (slot_w < 8) slot_w = 8;
+    UINTN dot_size = (g_strip_h > 14) ? 10 : (g_strip_h - 4);
+    UINTN dot_x = g_strip_x + 6 + i * slot_w + (slot_w - dot_size) / 2;
+    UINTN dot_y = g_strip_y + (g_strip_h - dot_size) / 2;
+
+    card_info_t *c = &g_cards[i];
+    UINT32 col = (c->state == CARD_RUNNING) ? COL_RUN
+               : (c->state == CARD_PASS)    ? COL_OK
+               : (c->state == CARD_FAIL)    ? COL_FAIL
+               : (c->state == CARD_SKIP)    ? COL_DIM
+               : COL_BAR_BG;
+    /* Clear the slot first (so a transition from RUNNING→PASS doesn't
+       leave a halo). */
+    blt_fill(dot_x - 2, dot_y - 2, dot_size + 4, dot_size + 4, COL_PANEL);
+    blt_fill(dot_x, dot_y, dot_size, dot_size, col);
+    if (c->state == CARD_RUNNING)
+        blt_fill(dot_x, dot_y, dot_size, 2, COL_ACCENT_HI);
+
+    /* Right-aligned counter — "N/M  ош:K". Repaint every call (cheap).
+       Counts done+running+failed against N_TESTS; errors are summed
+       from g_cards[].errors. */
+    UINTN done = 0;
+    UINT64 total_err = 0;
+    for (UINTN k = 0; k < N_TESTS; k++) {
+        if (g_cards[k].state == CARD_PASS ||
+            g_cards[k].state == CARD_FAIL ||
+            g_cards[k].state == CARD_SKIP) {
+            done++;
+        }
+        total_err += g_cards[k].errors;
+    }
+    CHAR16 buf[32];
+    SPrint(buf, sizeof(buf), L"  %d/%d  err:%ld  ",
+           (UINT32)done, (UINT32)N_TESTS, total_err);
+    UINTN buf_chars = StrLen(buf);
+    UINTN text_x = g_strip_x + g_strip_w - buf_chars * g_char_w - 6;
+    UINTN text_y = g_strip_y + (g_strip_h - g_char_h) / 2;
+    /* Clear right-side text area first */
+    blt_fill(text_x - 2, text_y, buf_chars * g_char_w + 4, g_char_h, COL_PANEL);
+    say_at_px(text_x, text_y, buf);
+}
+
+/* Paint the big focused card for test i (assumed to be the currently
+   running test). Shows: test name, elapsed/expected time, big progress
+   bar, live metrics (%, MB/s, errors, BW total, watts, °C). */
+static void card_focused_paint(UINTN i) {
+    if (!g_focused_cards) return;
+    if (i >= N_TESTS) return;
+
+    UINTN x = g_focus_x, y = g_focus_y;
+    UINTN w = g_focus_w, h = g_focus_h;
+    card_info_t *c = &g_cards[i];
+
+    /* Inner area — leave space for outline border. */
+    UINTN ix = x + 4, iw = w - 8;
+    UINTN row_h = g_char_h + 4;
+    UINTN row1_y = y + 6;
+    UINTN row3_y = y + h - row_h - 4;
+    UINTN row2_y = (row1_y + row3_y) / 2 - row_h / 2;
+
+    /* Clear each row strip individually to avoid full-card flicker
+       (only the changing pixels get rewritten). */
+    blt_fill(ix, row1_y, iw, row_h, COL_PANEL);
+    blt_fill(ix, row2_y, iw, row_h, COL_PANEL);
+    blt_fill(ix, row3_y, iw, row_h, COL_PANEL);
+
+    /* Row 1: test name (left) + index counter (right) */
+    say_at_px(ix + 4, row1_y, g_tests[i].name);
+    CHAR16 idx_buf[32];
+    SPrint(idx_buf, sizeof(idx_buf), L"[%d/%d]", (UINT32)(i + 1), (UINT32)N_TESTS);
+    UINTN idx_chars = StrLen(idx_buf);
+    UINTN idx_x = ix + iw - idx_chars * g_char_w - 4;
+    say_at_px(idx_x, row1_y, idx_buf);
+
+    /* Row 2: big progress bar spanning full inner width */
+    UINTN bar_h = g_char_h - 2;
+    if (bar_h < 10) bar_h = 10;
+    UINTN bar_y = row2_y + (row_h - bar_h) / 2;
+    UINT32 fill = c->pct_x10;
+    UINT32 bar_col = (c->state == CARD_FAIL) ? COL_FAIL
+                   : (c->state == CARD_PASS) ? COL_OK
+                   : COL_BAR_FILL;
+    blt_progress_bar(ix + 4, bar_y, iw - 8, bar_h, fill, bar_col, COL_BAR_BG);
+
+    /* Row 3: live metrics — pct, MB/s, errors, BW total, watts, temp.
+       Globals are file-static and already in scope here. BW shown in
+       GB/s when ≥1024 MB/s, else MB/s. */
+    UINT32 pct = c->pct_x10; if (pct > 1000) pct = 1000;
+    CHAR16 metrics[160];
+    UINT32 bw_gbs_x10 = g_bw_mbps_current ? (g_bw_mbps_current * 10 / 1024) : 0;
+    SPrint(metrics, sizeof(metrics),
+           T(L" %3d.%d%%   %5ld МБ/с   ош:%ld     BW %d.%d ГБ/с  %dВт  %d°C ",
+             L" %3d.%d%%   %5ld MB/s   err:%ld    BW %d.%d GB/s  %dW  %d°C "),
+           pct / 10, pct % 10, c->mbs, c->errors,
+           bw_gbs_x10 / 10, bw_gbs_x10 % 10,
+           (UINT32)g_pkg_power_w, (UINT32)g_max_temp_c);
+    say_at_px(ix + 4, row3_y, metrics);
+}
+
+/* Helper: clear + repaint the big focused card from scratch (used when
+   the active test changes — see card_paint above). */
+static void card_focused_redraw(void) {
+    if (!g_focused_cards) return;
+    blt_fill(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_PANEL);
+    box_outline(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_BORDER);
+    if (g_focus_active_idx < N_TESTS) {
+        card_focused_paint(g_focus_active_idx);
+    }
+}
+
 static void cards_init_all(void) {
     if (!g_show_cards) {
         /* Still need to reset state — render_progress() reads c->state to
@@ -6526,13 +6726,41 @@ static void cards_init_all(void) {
         }
         return;
     }
-    say_at_px(g_card_x, g_card_y - g_char_h - 2,
-              T(L"  Прогресс тестов", L"  Test Progress"));
+    /* Reset all card state first */
     for (UINTN i = 0; i < N_TESTS; i++) {
         g_cards[i].state = CARD_IDLE;
         g_cards[i].pct_x10 = 0;
         g_cards[i].mbs = 0;
         g_cards[i].errors = 0;
+    }
+
+    if (g_focused_cards) {
+        /* Section title above the strip */
+        say_at_px(g_strip_x, g_strip_y - g_char_h - 2,
+                  T(L"  Прогресс тестов", L"  Test Progress"));
+        /* Strip background + border */
+        blt_fill(g_strip_x, g_strip_y, g_strip_w, g_strip_h, COL_PANEL);
+        box_outline(g_strip_x, g_strip_y, g_strip_w, g_strip_h, COL_BORDER);
+        /* Focused card empty background + border */
+        blt_fill(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_PANEL);
+        box_outline(g_focus_x, g_focus_y, g_focus_w, g_focus_h, COL_BORDER);
+        g_focus_active_idx = (UINTN)-1;
+        /* Paint all strip dots (IDLE state) + counter */
+        for (UINTN i = 0; i < N_TESTS; i++) {
+            card_strip_paint(i);
+        }
+        /* Placeholder text in the focused area while nothing runs */
+        UINTN ty = g_focus_y + (g_focus_h - g_char_h) / 2;
+        say_at_px(g_focus_x + 8, ty,
+                  T(L"  Ожидание старта теста...",
+                    L"  Waiting for test start..."));
+        return;
+    }
+
+    /* Original full-list layout */
+    say_at_px(g_card_x, g_card_y - g_char_h - 2,
+              T(L"  Прогресс тестов", L"  Test Progress"));
+    for (UINTN i = 0; i < N_TESTS; i++) {
         card_paint(i);
     }
 }
@@ -7803,8 +8031,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.16 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.16 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.17 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.17 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9584,7 +9812,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.16 init ===");
+    log_line(L"=== MemForge2 v0.4.17 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9629,7 +9857,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.16 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.17 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -9644,7 +9872,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.16 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.17 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core

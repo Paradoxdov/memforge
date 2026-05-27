@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.19";
+    CHAR16 *title = L"MEMFORGE v0.4.20";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -943,7 +943,7 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
-/* v0.4.19 — focused cards layout for small screens (g_h < 900).
+/* v0.4.20 — focused cards layout for small screens (g_h < 900).
    Instead of one full-width row per test (14 rows × ~40 px = 560 px,
    which on a 1024×768 screen eats 70% of vertical space and clips the
    core panel + footer), we draw:
@@ -1013,7 +1013,7 @@ static void compute_layout(UINTN n_tests) {
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
 
-    /* v0.4.19 — focused layout on small screens.
+    /* v0.4.20 — focused layout on small screens.
        On g_h<900 the per-test card list eats 60-70% of vertical space
        and clips the core panel / footer (YgrecK field report on 1024×768
        Radeon HD 4350). Replace with: 1-row strip of all test dots +
@@ -1227,9 +1227,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.19   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.20   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.19   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.20   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1239,8 +1239,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.19   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.19   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.20   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.20   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1248,16 +1248,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.19  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.19  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.20  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.20  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.19 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.19 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.20 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.20 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1783,7 +1783,7 @@ static int dominant_dimm_idx(void) {
     return best;
 }
 
-/* v0.4.19 — detect dual-channel interleave ambiguity.
+/* v0.4.20 — detect dual-channel interleave ambiguity.
    On consumer desktops with dual/quad-channel memory, the iMC interleaves
    addresses between channels at 64-byte (cache-line) granularity. A
    SINGLE bad chip on one stick produces errors that, when mapped through
@@ -1792,7 +1792,7 @@ static int dominant_dimm_idx(void) {
 
    Field report from a Habr user (Netac DDR4 kit): same stuck bit
    D[53] was reported 24 times, distributed as A2 (8) + B2 (11) + ? (5).
-   Pre-v0.4.19 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
+   Pre-v0.4.20 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
    physically it's likely ONE bad chip on one of A2/B2, NOT both.
 
    This helper returns the list of DIMM indices that each hold >=25% of
@@ -4774,7 +4774,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.19 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.20 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4782,7 +4782,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.19 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.20 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6402,6 +6402,26 @@ static test_def_t g_tests[] = {
 };
 #define N_TESTS (sizeof(g_tests) / sizeof(g_tests[0]))
 
+/* v0.4.20 — map a kernel enum (KER_*) to its position in g_tests[].
+   CRITICAL: do NOT index g_tests[] directly by a kernel_id_t value.
+   The enum values do not match array positions (e.g., KER_AVX2_SUSTAINED
+   = 12 maps to position 0 in g_tests because AVX2 Sustained is the
+   first row of the table, while position 12 happens to be L3 Cache
+   Stress). Before this helper existed, an AVX2 error was displayed in
+   the verdict, JSON and log as "T=L3 Cache Stress" — total
+   misattribution that completely broke field triage. Always use this
+   helper for kernel→display-name lookup. */
+static int tests_idx_for_kernel(kernel_id_t k) {
+    for (UINTN i = 0; i < N_TESTS; i++) {
+        if (g_tests[i].k == k) return (int)i;
+    }
+    return -1;
+}
+static CHAR16 *name_for_kernel(kernel_id_t k) {
+    int ti = tests_idx_for_kernel(k);
+    return (ti >= 0) ? g_tests[ti].name : L"(unknown kernel)";
+}
+
 /* Activity row painter — invoked by render_header() on every tick to show
    what test is running, how long it's been on this test, and (critically)
    a per-second countdown when Bit Fade is in its silent wait phase. Lives
@@ -6534,7 +6554,7 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
-/* v0.4.19 — Forward decls for focused-mode helpers (defined below
+/* v0.4.20 — Forward decls for focused-mode helpers (defined below
    card_paint so they can share the same color-lookup logic). */
 static void card_paint_full(UINTN i);
 static void card_strip_paint(UINTN i);
@@ -6648,7 +6668,7 @@ static void card_paint_full(UINTN i) {
     }
 }
 
-/* ---------- Focused-mode card painters (v0.4.19) ---------- */
+/* ---------- Focused-mode card painters (v0.4.20) ---------- */
 
 /* Paint the small status dot for test i in the top strip. The strip is
    one row tall and shows N evenly-spaced dots, one per test. The dot
@@ -7982,7 +8002,7 @@ static void render_simple_verdict(UINT64 total_ms) {
         }
     } else { /* VERDICT_FAIL */
         int didx = dominant_dimm_idx();
-        /* v0.4.19 — interleave detection.
+        /* v0.4.20 — interleave detection.
            If errors are distributed across 2+ DIMMs (typical dual-channel
            interleave hiding a single bad chip behind two DIMM labels),
            we MUST NOT confidently name one DIMM. Verdict instead tells
@@ -8205,8 +8225,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.19 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.19 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.20 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.20 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -8288,18 +8308,23 @@ static void render_summary(UINT64 total_ms) {
                 CHAR16 chip[64] = L"";
                 if (didx >= 0)
                     chip_label_for_bit((UINT32)didx, bp, chip, 64);
+                /* v0.4.20 — use SMBIOS Type 17 locator string ("DDR4-B2")
+                   instead of array-index-based "DIMM%d" which had nothing
+                   to do with the physical slot label the user sees. */
+                CHAR8 *loc = (didx >= 0 && g_dimms[didx].locator[0])
+                             ? g_dimms[didx].locator : (CHAR8*)"?";
                 if (didx >= 0 && chip[0]) {
                     /* Full info: DIMM + exact chip designator */
                     SPrint(sb, sizeof(sb),
-                           T(L"⚠ Застрял бит D[%d] → DIMM%d, %s: %d ошибок",
-                             L"⚠ Stuck bit D[%d] → DIMM%d, %s: %d errors"),
-                           bp, didx + 1, chip, stuck_n);
+                           T(L"⚠ Застрял бит D[%d] → %a, %s: %d ошибок",
+                             L"⚠ Stuck bit D[%d] → %a, %s: %d errors"),
+                           bp, loc, chip, stuck_n);
                 } else if (didx >= 0) {
                     /* DIMM known, exact chip not — say so plainly */
                     SPrint(sb, sizeof(sb),
-                           T(L"⚠ Застрял бит D[%d] → DIMM%d (точный чип не определён по SPD): %d ошибок",
-                             L"⚠ Stuck bit D[%d] → DIMM%d (exact chip unknown per SPD): %d errors"),
-                           bp, didx + 1, stuck_n);
+                           T(L"⚠ Застрял бит D[%d] → %a (точный чип не определён по SPD): %d ошибок",
+                             L"⚠ Stuck bit D[%d] → %a (exact chip unknown per SPD): %d errors"),
+                           bp, loc, stuck_n);
                 } else {
                     SPrint(sb, sizeof(sb),
                            T(L"⚠ Застрял бит D[%d] (планку определить не удалось): %d ошибок",
@@ -8839,7 +8864,7 @@ static void write_json_report(UINT64 total_ms) {
             L"\"at\":{\"t_ms\":%ld,\"temp_c\":%d,\"pkg_w\":%d,"
             L"\"throttle\":%d,\"vid_mv\":%d}}",
             (i > 0) ? "," : "",
-            g_tests[r->test].name, r->core + 1,
+            name_for_kernel(r->test), r->core + 1,
             r->phys_addr, r->expected, r->actual, r->xor_mask, r->pass_idx,
             dimm_lab,
             cc.bank_group, cc.bank, cc.row, cc.column,
@@ -9993,7 +10018,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.19 init ===");
+    log_line(L"=== MemForge2 v0.4.20 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -10038,7 +10063,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.19 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.20 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -10053,7 +10078,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.19 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.20 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core
@@ -10668,7 +10693,28 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                per-test results to survive that. Cheap (1× per test, not
                1× per log line). */
             flush_log_now();
-            g_summary[i] = r;
+            /* v0.4.20 — ACCUMULATE across marathon passes, do not OVERWRITE.
+               Pre-v0.4.20 the line was `g_summary[i] = r;` which kept only
+               the LAST pass's per-test result. On a 16-hour marathon with
+               an intermittent error rate of 1 per pass, that meant the
+               final summary table showed "errors: 0" because the most
+               recent pass happened to be clean — completely hiding the
+               24 cumulative errors found across earlier passes. Also fed
+               into JSON `summary.total_errors: 0` and `verdict: "PASS"`,
+               which then misled any automated post-test analyzer.        */
+            if (g_run_passes_done == 0) {
+                /* First pass: initialize with this pass's result */
+                g_summary[i] = r;
+            } else {
+                /* Subsequent passes: accumulate counts; status is "sticky":
+                   FAIL wins over PASS wins over SKIP. */
+                g_summary[i].errors  += r.errors;
+                g_summary[i].bytes   += r.bytes;
+                g_summary[i].time_ms += r.time_ms;
+                if (r.status == 2) g_summary[i].status = 2;          /* FAIL is sticky */
+                else if (g_summary[i].status == 0 && r.status == 1)
+                    g_summary[i].status = 1;                          /* upgrade SKIP→PASS */
+            }
             /* Bump cumulative error counter shown in the live header. */
             g_run_total_errors += r.errors;
 
@@ -10763,7 +10809,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 SPrint(lb, sizeof(lb),
                        L"[ERR] T=%s Core=%d Addr=0x%lx Exp=0x%lx Act=0x%lx XOR=0x%lx DIMM=%s "
                        L"~bg=%d ~bank=%d ~row=0x%lx ~col=0x%x",
-                       g_tests[r->test].name, r->core + 1,
+                       name_for_kernel(r->test), r->core + 1,
                        r->phys_addr, r->expected, r->actual, r->xor_mask,
                        dimm_lab,
                        coords.bank_group, coords.bank, coords.row, coords.column);

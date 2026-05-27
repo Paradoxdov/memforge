@@ -1,6 +1,6 @@
 # MemForge2
 
-**Latest release: [v0.4.24](https://github.com/Paradoxdov/memforge/releases/latest)** — download `MemForge2.efi`, copy to `EFI/BOOT/loader.efi` on a FAT32 USB.
+**Latest release: [v0.4.25](https://github.com/Paradoxdov/memforge/releases/latest)** — download `MemForge2.efi`, copy to `EFI/BOOT/loader.efi` on a FAT32 USB.
 
 UEFI memory diagnostic tool for shop / repair use. Boots from USB before any
 OS loads, runs 14 stress and pattern tests in parallel on every CPU core,
@@ -193,7 +193,7 @@ EnableAVX=1
 ;MarathonHours=0    ; 0 = off, 1..24 = run for N hours
 
 [Meta]
-Version=0.4.24
+Version=0.4.25
 Language=en         ; "ru" or "en"
 
 [Display]

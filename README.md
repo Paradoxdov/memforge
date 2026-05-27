@@ -120,16 +120,23 @@ hangs) take priority over feature requests. Thanks for your patience.
   **Honest scope of (1)**: SMBIOS Type 20 maps each physical address to
   the slot the firmware says owns it. On servers / NUMA / single-channel
   / non-interleaved consumer setups this gives the exact bad DIMM. On a
-  typical dual-channel desktop the iMC interleaves addresses at 64-byte
-  granularity between the channel pair, so a single bad chip on ONE stick
-  produces errors that appear distributed across both sticks in the pair.
-  In that case (auto-detected since v0.4.18) the verdict tells the user
-  plainly "REPLACE ONE of A2 / B2 — physically remove one and retest to
-  identify the bad stick" instead of confidently picking one. We narrow
-  from "1 of 4-8 sticks" to "1 of the 2 in this pair"; that's worse than
-  the README screenshot's "DIMM1 pinpointed" (that was a non-interleaved
-  DDR3 build) but still a lot more than memtest86+ which only reports
-  raw addresses.
+  typical dual-channel desktop the iMC interleaves addresses between the
+  channel pair, so a single bad chip on ONE stick can appear as errors
+  distributed across both sticks. Since v0.4.21 the verdict distinguishes
+  the two cases by checking whether the BIOS-reported address ranges
+  overlap (real interleave) or are disjoint (block mode); on block-mapped
+  systems "ZAMENIT' OBE" is the honest verdict, on real interleave it's
+  "ZAMENIT' ODNU iz pary". Since v0.4.25, when verdict can't be sure
+  which of a pair is at fault, the program automatically re-tests each
+  DIMM in isolation (~5 min) and produces a definitive `REPLACE X`
+  answer — no manual swapping required on most consumer desktops.
+- **Auto-isolation** — when the post-test verdict finds errors spread
+  across multiple DIMM address ranges, the program automatically re-runs
+  the failing kernel against each affected stick in turn (constraining
+  the test buffer to that DIMM's SMBIOS Type 20 range). Final screen
+  reads e.g. "DDR4-A2: 0 errors / DDR4-B2: 8 errors → REPLACE DDR4-B2,
+  HIGH confidence (confirmed by isolation)". No user input required;
+  takes ~5 min on top of the main run.
 - **Marathon mode** — `MarathonHours=N` (1-24) keeps cycling tests for N
   hours. Multipass iterator wraps when RAM coverage cycle completes, so
   every cycle covers fresh (region, offset) pairs. Catches the
@@ -164,8 +171,12 @@ After the test, on the USB next to `loader.efi`:
   per-stride MB/s, SMBus signal integrity.
 - `report.json` — structured data including everything above. Each error
   record carries `at: {t_ms, temp_c, pkg_w, throttle, vid_mv}` for
-  context-aware AI analysis. Plain JSON, easy to feed into any downstream
-  tool.
+  context-aware AI analysis. A top-level `peaks` block (added v0.4.28)
+  reports run-wide max temperature, peak package power, max frequency
+  reached, peak/theoretical bandwidth, throttle event count, and which
+  mechanism actually lifted the CPU to turbo (HWP vs legacy PERF_CTL vs
+  AMD CPPC2) so an automated analyzer can verify the CPU was genuinely
+  loaded. Plain JSON, easy to feed into any downstream tool.
 
 ## Building
 

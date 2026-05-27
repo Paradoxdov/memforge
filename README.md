@@ -1,5 +1,7 @@
 # MemForge2
 
+**Latest release: [v0.4.21](https://github.com/Paradoxdov/memforge/releases/latest)** — download `MemForge2.efi`, copy to `EFI/BOOT/loader.efi` on a FAT32 USB.
+
 UEFI memory diagnostic tool for shop / repair use. Boots from USB before any
 OS loads, runs 14 stress and pattern tests in parallel on every CPU core,
 captures hardware ECC events via MCA registers, snapshots environmental

@@ -1,14 +1,9 @@
 /*
- * MemForge2 v0.3 — UEFI memory tester written from scratch.
+ * MemForge2 v0.4.21 — UEFI memory tester written from scratch.
  *
- * v0.3 visual + measurement upgrades:
- *   - Real-time progress inside each test kernel (callback-driven, not faked).
- *   - Labels under each status grid cell (test name + result line).
- *   - Per-core progress row (one mini-bar per CPU, fills as that AP finishes).
- *   - Live percentage + MB/s shown next to the test progress bar.
- *   - Consistent margins (single left/right padding for all elements).
- *   - Memory-map strip showing slice currently being touched per core.
- *   - Final summary table (test, errors, MB/s, time) — printed on screen.
+ * Latest release: https://github.com/Paradoxdov/memforge/releases
+ * For per-version changes see git log / GitHub Releases page.
+ * Bumping reminder: update the L"v0.X.Y" strings AND this header.
  *
  * Build: see Makefile. Outputs MemForge2.efi.
  */

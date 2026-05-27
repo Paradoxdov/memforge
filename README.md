@@ -107,6 +107,20 @@ BW degradation trend.*
   3. Stuck-bit detection via XOR-mask repetition
   4. Stuck-row / stuck-bank detection via DRAM-coord heuristic
   5. 1-GB histogram of error addresses
+
+  **Honest scope of (1)**: SMBIOS Type 20 maps each physical address to
+  the slot the firmware says owns it. On servers / NUMA / single-channel
+  / non-interleaved consumer setups this gives the exact bad DIMM. On a
+  typical dual-channel desktop the iMC interleaves addresses at 64-byte
+  granularity between the channel pair, so a single bad chip on ONE stick
+  produces errors that appear distributed across both sticks in the pair.
+  In that case (auto-detected since v0.4.18) the verdict tells the user
+  plainly "REPLACE ONE of A2 / B2 — physically remove one and retest to
+  identify the bad stick" instead of confidently picking one. We narrow
+  from "1 of 4-8 sticks" to "1 of the 2 in this pair"; that's worse than
+  the README screenshot's "DIMM1 pinpointed" (that was a non-interleaved
+  DDR3 build) but still a lot more than memtest86+ which only reports
+  raw addresses.
 - **Marathon mode** — `MarathonHours=N` (1-24) keeps cycling tests for N
   hours. Multipass iterator wraps when RAM coverage cycle completes, so
   every cycle covers fresh (region, offset) pairs. Catches the
@@ -177,7 +191,7 @@ EnableAVX=1
 ;MarathonHours=0    ; 0 = off, 1..24 = run for N hours
 
 [Meta]
-Version=0.4.17
+Version=0.4.18
 Language=en         ; "ru" or "en"
 
 [Display]

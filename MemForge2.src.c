@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.17";
+    CHAR16 *title = L"MEMFORGE v0.4.18";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -943,7 +943,7 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
-/* v0.4.17 — focused cards layout for small screens (g_h < 900).
+/* v0.4.18 — focused cards layout for small screens (g_h < 900).
    Instead of one full-width row per test (14 rows × ~40 px = 560 px,
    which on a 1024×768 screen eats 70% of vertical space and clips the
    core panel + footer), we draw:
@@ -1013,7 +1013,7 @@ static void compute_layout(UINTN n_tests) {
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
 
-    /* v0.4.17 — focused layout on small screens.
+    /* v0.4.18 — focused layout on small screens.
        On g_h<900 the per-test card list eats 60-70% of vertical space
        and clips the core panel / footer (YgrecK field report on 1024×768
        Radeon HD 4350). Replace with: 1-row strip of all test dots +
@@ -1227,9 +1227,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.17   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.18   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.17   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.18   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1239,8 +1239,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.17   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.17   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.18   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.18   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1248,16 +1248,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.17  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.17  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.18  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.18  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.17 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.17 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.18 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.18 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1775,6 +1775,61 @@ static int dominant_dimm_idx(void) {
         if (counts[j] > best_n) { best_n = counts[j]; best = (int)j; }
     }
     return best;
+}
+
+/* v0.4.18 — detect dual-channel interleave ambiguity.
+   On consumer desktops with dual/quad-channel memory, the iMC interleaves
+   addresses between channels at 64-byte (cache-line) granularity. A
+   SINGLE bad chip on one stick produces errors that, when mapped through
+   SMBIOS Type 20, appear distributed across BOTH sticks in the channel
+   pair because consecutive 64-byte blocks alternate between sticks.
+
+   Field report from a Habr user (Netac DDR4 kit): same stuck bit
+   D[53] was reported 24 times, distributed as A2 (8) + B2 (11) + ? (5).
+   Pre-v0.4.18 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
+   physically it's likely ONE bad chip on one of A2/B2, NOT both.
+
+   This helper returns the list of DIMM indices that each hold >=25% of
+   localised errors. If 2+ DIMMs cross that threshold AND errors share
+   a common stuck-bit signature, the verdict can no longer confidently
+   pick one — it should tell the user "one of these N — swap to isolate".
+   Returns count written into out_idx[] (0..cap).                       */
+static UINTN distributed_dimm_indices(int *out_idx, UINTN cap) {
+    UINT32 shown = g_err_count > MAX_ERR_RECORDS ? MAX_ERR_RECORDS : g_err_count;
+    if (shown == 0 || g_dimm_count == 0 || g_dimm_map_count == 0) return 0;
+    UINT32 counts[MAX_DIMMS] = {0};
+    UINT32 total_localized = 0;
+    for (UINT32 i = 0; i < shown; i++) {
+        UINT64 addr = g_err_records[i].phys_addr;
+        for (UINT32 m = 0; m < g_dimm_map_count; m++) {
+            if (addr >= g_dimm_map[m].start && addr <= g_dimm_map[m].end) {
+                for (UINT32 j = 0; j < g_dimm_count; j++) {
+                    if (g_dimms[j].handle == g_dimm_map[m].dev_handle) {
+                        if (j < MAX_DIMMS) {
+                            counts[j]++;
+                            total_localized++;
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if (total_localized == 0) return 0;
+    /* Threshold: a DIMM is "significantly involved" if it holds at least
+       25% of localised errors. Pure interleave on a dual-channel pair
+       gives ~50/50 split; the 25% threshold also catches asymmetric
+       splits (8/11/5 in the Habr case → A2=33%, B2=46%, both above). */
+    UINT32 threshold = (total_localized + 3) / 4;
+    if (threshold < 2) threshold = 2;   /* ignore single-error noise */
+    UINTN n = 0;
+    for (UINT32 j = 0; j < g_dimm_count && n < cap; j++) {
+        if (counts[j] >= threshold) {
+            out_idx[n++] = (int)j;
+        }
+    }
+    return n;
 }
 
 /* Build a 1-GB-bucketed histogram of error addresses. Writes up to
@@ -4713,7 +4768,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.17 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.18 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4721,7 +4776,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.17 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.18 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6473,7 +6528,7 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
-/* v0.4.17 — Forward decls for focused-mode helpers (defined below
+/* v0.4.18 — Forward decls for focused-mode helpers (defined below
    card_paint so they can share the same color-lookup logic). */
 static void card_paint_full(UINTN i);
 static void card_strip_paint(UINTN i);
@@ -6587,7 +6642,7 @@ static void card_paint_full(UINTN i) {
     }
 }
 
-/* ---------- Focused-mode card painters (v0.4.17) ---------- */
+/* ---------- Focused-mode card painters (v0.4.18) ---------- */
 
 /* Paint the small status dot for test i in the top strip. The strip is
    one row tall and shows N evenly-spaced dots, one per test. The dot
@@ -7909,7 +7964,20 @@ static void render_simple_verdict(UINT64 total_ms) {
         }
     } else { /* VERDICT_FAIL */
         int didx = dominant_dimm_idx();
+        /* v0.4.18 — interleave detection.
+           If errors are distributed across 2+ DIMMs (typical dual-channel
+           interleave hiding a single bad chip behind two DIMM labels),
+           we MUST NOT confidently name one DIMM. Verdict instead tells
+           the user to physically isolate by swapping one out and retesting. */
+        int dist_idx[MAX_DIMMS];
+        UINTN dist_n = distributed_dimm_indices(dist_idx, MAX_DIMMS);
+        int is_distributed = (dist_n >= 2);
+
         verdict_confidence_t conf = compute_confidence();
+        /* Distributed errors → cap confidence at MEDIUM. Even with a clean
+           stuck-bit signature, we don't know WHICH of the channel pair the
+           bad chip lives on without physical isolation. */
+        if (is_distributed && conf == CONF_HIGH) conf = CONF_MED;
         CHAR16 *conf_str;
         UINT32  conf_col;
         switch (conf) {
@@ -7922,7 +7990,95 @@ static void render_simple_verdict(UINT64 total_ms) {
         }
 
         CHAR16 ln[220];
-        if (didx >= 0) {
+        if (is_distributed) {
+            /* Multiple DIMMs significantly involved — almost certainly
+               channel interleave hiding ONE bad stick. Name them ALL,
+               say plainly "ONE of these — isolate by swapping". */
+            CHAR16 dimm_list[220] = {0};
+            for (UINTN k = 0; k < dist_n; k++) {
+                CHAR16 frag[64];
+                if (k == 0)
+                    SPrint(frag, sizeof(frag), L"%a",
+                           (CHAR8*)g_dimms[dist_idx[k]].locator);
+                else
+                    SPrint(frag, sizeof(frag), L" или %a",
+                           (CHAR8*)g_dimms[dist_idx[k]].locator);
+                /* English version uses "or" instead of "или" — switch by lang */
+                if (!g_lang && k > 0)
+                    SPrint(frag, sizeof(frag), L" or %a",
+                           (CHAR8*)g_dimms[dist_idx[k]].locator);
+                /* Append to dimm_list */
+                UINTN have = StrLen(dimm_list);
+                UINTN need = StrLen(frag);
+                if (have + need + 1 < sizeof(dimm_list) / sizeof(CHAR16)) {
+                    for (UINTN c = 0; c <= need; c++)
+                        dimm_list[have + c] = frag[c];
+                }
+            }
+            SPrint(ln, sizeof(ln),
+                T(L"  ЗАМЕНИТЬ ОДНУ из: %s",
+                  L"  REPLACE ONE of:  %s"), dimm_list);
+            gfx_draw_str_color(cx, cy, ln, COL_FAIL);
+            cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Уверенность: %s  (нужна физическая проверка)",
+                  L"  Confidence:  %s  (physical isolation needed)"),
+                conf_str);
+            gfx_draw_str_color(cx, cy, ln, conf_col);
+            cy += cline + 6;
+
+            gfx_draw_str_color(cx, cy,
+                T(L"  Ошибки распределены по этим планкам в равной пропорции —",
+                  L"  Errors are distributed across these DIMMs roughly evenly —"),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  это типичная картина dual-channel interleave, когда один",
+                  L"  this is the typical dual-channel interleave pattern when"),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  дохлый чип на ОДНОЙ планке маскируется под две.",
+                  L"  one bad chip on ONE stick masquerades as two."),
+                COL_DIM); cy += cline + 6;
+
+            gfx_draw_str_color(cx, cy,
+                T(L"  Как определить точную:",
+                  L"  How to identify the exact one:"),
+                COL_ACCENT_HI); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  1. Выключите ПК, выньте ОДНУ из перечисленных планок.",
+                  L"  1. Power off, physically remove ONE of the listed DIMMs."),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  2. Запустите этот тест на 10 минут.",
+                  L"  2. Run this test for 10 minutes."),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  3. Ошибки исчезли → дохлая та, что вынули.",
+                  L"  3. Errors gone → the removed one was bad."),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"     Ошибки остались → дохлая оставшаяся.",
+                  L"     Errors still there → the remaining one is bad."),
+                COL_FG); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"     Ошибки уменьшились но есть → возможно обе.",
+                  L"     Errors reduced but still present → possibly both."),
+                COL_FG); cy += cline + 6;
+
+            /* Show "what was detected" once, attributed to the dominant DIMM
+               (for chip mapping context only — we know location is ambiguous). */
+            gfx_draw_str_color(cx, cy,
+                T(L"  ── Что обнаружено ──",
+                  L"  ── What was detected ──"),
+                COL_DIM); cy += cline;
+            CHAR16 l1[220], l2[220];
+            verdict_describe_what_broke(l1, sizeof(l1) / sizeof(CHAR16),
+                                         l2, sizeof(l2) / sizeof(CHAR16),
+                                         didx);
+            if (l1[0]) { gfx_draw_str_color(cx + g_char_w, cy, l1, COL_FAIL); cy += cline; }
+            if (l2[0]) { gfx_draw_str_color(cx + g_char_w, cy, l2, COL_FAIL); cy += cline; }
+        } else if (didx >= 0) {
+            /* Errors localized to one DIMM — keep the original honest verdict. */
             dimm_info_t *d = &g_dimms[didx];
             SPrint(ln, sizeof(ln),
                 T(L"  ЗАМЕНИТЬ:   %a",
@@ -7983,7 +8139,7 @@ static void render_simple_verdict(UINT64 total_ms) {
             if (l1[0]) { gfx_draw_str_color(cx + g_char_w, cy, l1, COL_FAIL); cy += cline; }
             if (l2[0]) { gfx_draw_str_color(cx + g_char_w, cy, l2, COL_FAIL); cy += cline; }
         } else {
-            /* No SMBIOS Type 20 mapping — best we can do is total + advice */
+            /* No SMBIOS Type 20 mapping — total + advice (physical, not INI) */
             SPrint(ln, sizeof(ln),
                 T(L"  Найдено %ld ошибок — точную планку определить не удалось",
                   L"  %ld errors found — could not pinpoint specific DIMM"),
@@ -7995,16 +8151,16 @@ static void render_simple_verdict(UINT64 total_ms) {
                 COL_ACCENT_HI);
             cy += cline;
             gfx_draw_str_color(cx, cy,
-                T(L"  • Проверь каждую планку отдельно: в quantai.ini",
-                  L"  • Test each DIMM separately: in quantai.ini"),
+                T(L"  • Выньте все планки кроме одной, прогоните 10 мин.",
+                  L"  • Pull out all DIMMs but one, run 10 min."),
                 COL_FG); cy += cline;
             gfx_draw_str_color(cx, cy,
-                T(L"    укажи TestOnlyDimm=1, потом 2, и т.д.",
-                  L"    set TestOnlyDimm=1, then 2, etc."),
+                T(L"  • Поочерёдно для каждой планки — увидите дохлую.",
+                  L"  • Repeat for each DIMM — you'll see the bad one."),
                 COL_FG); cy += cline;
             gfx_draw_str_color(cx, cy,
-                T(L"  • Сбрось XMP/EXPO в BIOS — может помочь",
-                  L"  • Reset XMP/EXPO in BIOS — may help"),
+                T(L"  • Сбрось XMP/EXPO в BIOS — может помочь.",
+                  L"  • Reset XMP/EXPO in BIOS — may help."),
                 COL_FG); cy += cline;
         }
     }
@@ -8031,8 +8187,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.17 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.17 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.18 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.18 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9812,7 +9968,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.17 init ===");
+    log_line(L"=== MemForge2 v0.4.18 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9857,7 +10013,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.17 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.18 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -9872,7 +10028,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.17 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.18 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core

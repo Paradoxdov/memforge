@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.15";
+    CHAR16 *title = L"MEMFORGE v0.4.16";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1182,9 +1182,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.15   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.16   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.15   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.16   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1194,8 +1194,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.15   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.15   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.16   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.16   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1203,16 +1203,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.15  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.15  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.16  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.16  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.15 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.15 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.16 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.16 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -4668,7 +4668,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.15 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.16 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4676,7 +4676,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.15 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.16 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -7803,8 +7803,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.15 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.15 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.16 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.16 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9522,14 +9522,20 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     }
 
     EFI_GUID mp_guid = EFI_MP_SERVICES_PROTOCOL_GUID;
-    uefi_call_wrapper(BS->LocateProtocol, 3, &mp_guid, NULL, (VOID **)&g_mp);
+    EFI_STATUS mp_locate_status = uefi_call_wrapper(BS->LocateProtocol, 3,
+                                                    &mp_guid, NULL, (VOID **)&g_mp);
+    EFI_STATUS mp_gnp_status = EFI_NOT_FOUND;
+    UINTN mp_raw_cores = 0, mp_raw_enabled = 0;
     if (g_mp) {
-        uefi_call_wrapper(g_mp->GetNumberOfProcessors, 3, g_mp,
-                          &g_n_cores, &g_n_enabled);
+        mp_gnp_status = uefi_call_wrapper(g_mp->GetNumberOfProcessors, 3, g_mp,
+                                          &g_n_cores, &g_n_enabled);
+        mp_raw_cores = g_n_cores;
+        mp_raw_enabled = g_n_enabled;
         if (g_n_enabled > MAX_CORES) g_n_enabled = MAX_CORES;
     }
     if (g_n_enabled == 0) g_n_enabled = 1;
     if (g_n_cores   == 0) g_n_cores   = 1;
+    /* MP services diagnostic log — written AFTER log file opens, see below. */
 
     /* We use our own bundled font (12x24) for ALL UI text, not UEFI ConOut.
        That gives us reliable Cyrillic rendering on any firmware. */
@@ -9578,7 +9584,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.15 init ===");
+    log_line(L"=== MemForge2 v0.4.16 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -9623,11 +9629,53 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
+                /* v0.4.16 — also log PixelFormat and PixelsPerScanLine
+                   so we can see if a card (e.g. old Radeon HD 4350) only
+                   offers BltOnly modes (PixelFormat=3) that prevent
+                   direct-fb rendering. */
                 SPrint(lb, sizeof(lb),
-                       L"[GFX]  mode[%d]=%dx%d %a",
+                       L"[GFX]  mode[%d]=%dx%d ppsl=%d pf=%d %a",
                        m, info->HorizontalResolution, info->VerticalResolution,
+                       info->PixelsPerScanLine, (UINT32)info->PixelFormat,
                        (m == cur) ? "<-- SELECTED" : "");
                 log_line(lb);
+            }
+        } else {
+            log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
+                     L"Falling back to 800x600 default. UI will not render correctly.");
+        }
+        /* v0.4.16 — MP Services Protocol diagnostic. Without this log it
+           was impossible to tell from a field report whether multi-core
+           dispatch failed (LocateProtocol error / GetNumberOfProcessors
+           returned 1) or the test was simply running on a single-core
+           CPU. YgrecK report on a 2009-era Radeon HD 4350 system showed
+           only CPU01 in the panel — could be either case. Now we log:
+             - LocateProtocol status
+             - GetNumberOfProcessors status + raw values
+             - whether we capped to MAX_CORES
+             - final g_n_cores / g_n_enabled used by tests. */
+        if (EFI_ERROR(mp_locate_status) || !g_mp) {
+            SPrint(lb, sizeof(lb),
+                   L"[MP] EFI_MP_SERVICES_PROTOCOL not found (status=0x%lx) "
+                   L"— tests will run on BSP only (single-thread). "
+                   L"This is normal on very old or stripped-down firmware.",
+                   (UINT64)mp_locate_status);
+            log_line(lb);
+        } else if (EFI_ERROR(mp_gnp_status)) {
+            SPrint(lb, sizeof(lb),
+                   L"[MP] GetNumberOfProcessors failed (status=0x%lx) "
+                   L"— tests will run on BSP only.",
+                   (UINT64)mp_gnp_status);
+            log_line(lb);
+        } else {
+            SPrint(lb, sizeof(lb),
+                   L"[MP] services OK: total=%d enabled=%d (raw); after cap g_n_enabled=%d",
+                   (UINT32)mp_raw_cores, (UINT32)mp_raw_enabled,
+                   (UINT32)g_n_enabled);
+            log_line(lb);
+            if (mp_raw_enabled == 1 && mp_raw_cores > 1) {
+                log_line(L"[MP] WARN: firmware reports total>1 but only 1 enabled — "
+                         L"likely BIOS hyperthreading-off or AP-disabled-at-POST.");
             }
         }
     }

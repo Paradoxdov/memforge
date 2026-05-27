@@ -839,7 +839,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.20";
+    CHAR16 *title = L"MEMFORGE v0.4.21";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -943,7 +943,7 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
-/* v0.4.20 — focused cards layout for small screens (g_h < 900).
+/* v0.4.21 — focused cards layout for small screens (g_h < 900).
    Instead of one full-width row per test (14 rows × ~40 px = 560 px,
    which on a 1024×768 screen eats 70% of vertical space and clips the
    core panel + footer), we draw:
@@ -1013,7 +1013,7 @@ static void compute_layout(UINTN n_tests) {
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
 
-    /* v0.4.20 — focused layout on small screens.
+    /* v0.4.21 — focused layout on small screens.
        On g_h<900 the per-test card list eats 60-70% of vertical space
        and clips the core panel / footer (YgrecK field report on 1024×768
        Radeon HD 4350). Replace with: 1-row strip of all test dots +
@@ -1227,9 +1227,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.20   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.21   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ост ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.20   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.21   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1239,8 +1239,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.20   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
-                 L"  MEMFORGE v0.4.20   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.21   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   %02d:%02d   |   ост ~%02d:%02d",
+                 L"  MEMFORGE v0.4.21   |   %ld.%ld GB RAM   |   %s   |   %s   |   %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1248,16 +1248,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.20  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
-                 L"  MEMFORGE v0.4.20  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
+               T(L"  MEMFORGE v0.4.21  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  %02d:%02d",
+                 L"  MEMFORGE v0.4.21  |  %ld.%ld GB RAM  |  %s  |  %s  |  %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.20 | %s | %s | %02d:%02d",
-                 L" MEMFORGE v0.4.20 | %s | %s | %02d:%02d"),
+               T(L" MEMFORGE v0.4.21 | %s | %s | %02d:%02d",
+                 L" MEMFORGE v0.4.21 | %s | %s | %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1783,7 +1783,7 @@ static int dominant_dimm_idx(void) {
     return best;
 }
 
-/* v0.4.20 — detect dual-channel interleave ambiguity.
+/* v0.4.21 — detect dual-channel interleave ambiguity.
    On consumer desktops with dual/quad-channel memory, the iMC interleaves
    addresses between channels at 64-byte (cache-line) granularity. A
    SINGLE bad chip on one stick produces errors that, when mapped through
@@ -1792,7 +1792,7 @@ static int dominant_dimm_idx(void) {
 
    Field report from a Habr user (Netac DDR4 kit): same stuck bit
    D[53] was reported 24 times, distributed as A2 (8) + B2 (11) + ? (5).
-   Pre-v0.4.20 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
+   Pre-v0.4.21 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
    physically it's likely ONE bad chip on one of A2/B2, NOT both.
 
    This helper returns the list of DIMM indices that each hold >=25% of
@@ -1836,6 +1836,82 @@ static UINTN distributed_dimm_indices(int *out_idx, UINTN cap) {
         }
     }
     return n;
+}
+
+/* v0.4.21 — Approach D: detect whether SMBIOS Type 20 reports REAL
+   cache-line interleave (overlapping address ranges across DIMMs) or
+   BLOCK mapping (disjoint ranges, each DIMM owns its own physical
+   region). PassMark forum & KIT paper both confirm that even though
+   the iMC physically interleaves consumer dual-channel at 64-byte
+   cache-line granularity, BIOS vendors often emit Type 20 entries in
+   BLOCK form (one DIMM per region) — what we see in the field on
+   Gigabyte B760M DDR4 (A2=0..8GB, B2=8..16GB, intl depth=2 but ranges
+   disjoint). Two interpretations:
+     - Real disjoint = independent channels, no interleave → errors
+       distributed across DIMMs really are on physically separate sticks.
+     - Pseudo-interleave (BIOS lies) = iMC interleaves, but Type 20 hides
+       it → errors distributed look like multiple sticks but are one chip.
+   Without iMC PCI register access (Intel doesn't document MAD_*
+   registers for consumer Alder Lake), we use a heuristic:
+     overlap_found == 1 → trust Type 20 reports interleave, multi-DIMM
+                          errors → "ONE chip on ONE of pair X/Y"
+     overlap_found == 0 + intl_depth_max <= 1 → block mode, multi-DIMM
+                          errors → "BOTH sticks have faults"
+     overlap_found == 0 + intl_depth_max  > 1 → BIOS conflict, fall back
+                          to bit-6 channel polarity analysis to decide.
+   Returns 1 if any pair of Type 20 entries has overlapping ranges. */
+static int type20_has_overlapping_ranges(void) {
+    for (UINT32 i = 0; i < g_dimm_map_count; i++) {
+        for (UINT32 j = i + 1; j < g_dimm_map_count; j++) {
+            if (g_dimm_map[i].dev_handle == g_dimm_map[j].dev_handle) continue;
+            /* Ranges overlap iff start_i <= end_j && start_j <= end_i. */
+            if (g_dimm_map[i].start <= g_dimm_map[j].end &&
+                g_dimm_map[j].start <= g_dimm_map[i].end) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+static UINT8 type20_max_interleave_depth(void) {
+    UINT8 m = 0;
+    for (UINT32 i = 0; i < g_dimm_map_count; i++) {
+        if (g_dimm_map[i].interleave_depth > m)
+            m = g_dimm_map[i].interleave_depth;
+    }
+    return m;
+}
+
+/* v0.4.21 — Approach A: bit-6 polarity analysis of error addresses.
+   On most Intel/AMD consumer dual-channel desktops with DDR4/DDR5, the
+   iMC's channel selector is physical address bit 6 (alternating 64-byte
+   cache lines between channels). If all error records share the same
+   bit-6 value, that's a strong hint the bad cell/chip lives in only ONE
+   channel even though Type 20 (block-mapped) may have attributed them
+   to multiple DIMM labels. Returns:
+      0 = mixed (errors on both bit-6 values, no strong signal)
+      1 = all errors at bit 6 == 0 (likely channel A)
+      2 = all errors at bit 6 == 1 (likely channel B)
+   "All" = ≥85% on one polarity; ≥3 errors required for a verdict
+   (single-error noise gives no signal). On chipsets where the channel
+   selector isn't bit 6 (Skylake-X page-stride hash, some servers), this
+   will return 0 and the caller should fall back to the conservative
+   "physical isolation needed" message. */
+static int bit6_channel_polarity(void) {
+    UINT32 shown = g_err_count > MAX_ERR_RECORDS ? MAX_ERR_RECORDS : g_err_count;
+    if (shown < 3) return 0;
+    UINT32 n0 = 0, n1 = 0;
+    for (UINT32 i = 0; i < shown; i++) {
+        if ((g_err_records[i].phys_addr >> 6) & 1) n1++;
+        else n0++;
+    }
+    UINT32 total = n0 + n1;
+    if (total == 0) return 0;
+    /* 85% threshold — allows a few "noise" errors from a different
+       cause without losing the signal. */
+    if (n0 * 100 >= total * 85) return 1;
+    if (n1 * 100 >= total * 85) return 2;
+    return 0;
 }
 
 /* Build a 1-GB-bucketed histogram of error addresses. Writes up to
@@ -4774,7 +4850,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.20 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.21 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4782,7 +4858,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.20 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.21 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6402,7 +6478,7 @@ static test_def_t g_tests[] = {
 };
 #define N_TESTS (sizeof(g_tests) / sizeof(g_tests[0]))
 
-/* v0.4.20 — map a kernel enum (KER_*) to its position in g_tests[].
+/* v0.4.21 — map a kernel enum (KER_*) to its position in g_tests[].
    CRITICAL: do NOT index g_tests[] directly by a kernel_id_t value.
    The enum values do not match array positions (e.g., KER_AVX2_SUSTAINED
    = 12 maps to position 0 in g_tests because AVX2 Sustained is the
@@ -6554,7 +6630,7 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
-/* v0.4.20 — Forward decls for focused-mode helpers (defined below
+/* v0.4.21 — Forward decls for focused-mode helpers (defined below
    card_paint so they can share the same color-lookup logic). */
 static void card_paint_full(UINTN i);
 static void card_strip_paint(UINTN i);
@@ -6668,7 +6744,7 @@ static void card_paint_full(UINTN i) {
     }
 }
 
-/* ---------- Focused-mode card painters (v0.4.20) ---------- */
+/* ---------- Focused-mode card painters (v0.4.21) ---------- */
 
 /* Paint the small status dot for test i in the top strip. The strip is
    one row tall and shows N evenly-spaced dots, one per test. The dot
@@ -8002,20 +8078,35 @@ static void render_simple_verdict(UINT64 total_ms) {
         }
     } else { /* VERDICT_FAIL */
         int didx = dominant_dimm_idx();
-        /* v0.4.20 — interleave detection.
-           If errors are distributed across 2+ DIMMs (typical dual-channel
-           interleave hiding a single bad chip behind two DIMM labels),
-           we MUST NOT confidently name one DIMM. Verdict instead tells
-           the user to physically isolate by swapping one out and retesting. */
         int dist_idx[MAX_DIMMS];
         UINTN dist_n = distributed_dimm_indices(dist_idx, MAX_DIMMS);
         int is_distributed = (dist_n >= 2);
 
+        /* v0.4.21 — Approach D + A: classify WHY errors are distributed.
+             type20_overlap = 1 → ranges overlap (real cache-line interleave)
+                                  → "ONE chip behind two labels"
+             type20_overlap = 0, depth ≤ 1 → block mode (disjoint ranges,
+                                  no interleave claim) → "BOTH sticks bad"
+             type20_overlap = 0, depth  > 1 → BIOS pseudo-interleave
+                                  conflict → fall back to bit-6 polarity.  */
+        int type20_overlap = is_distributed ? type20_has_overlapping_ranges() : 0;
+        UINT8 type20_depth = is_distributed ? type20_max_interleave_depth() : 1;
+        int bit6_pol = is_distributed ? bit6_channel_polarity() : 0;
+        enum { DIST_NONE = 0, DIST_PAIR_INTERLEAVE, DIST_BOTH_STICKS_BAD, DIST_AMBIGUOUS };
+        int dist_kind = DIST_NONE;
+        if (is_distributed) {
+            if (type20_overlap)                     dist_kind = DIST_PAIR_INTERLEAVE;
+            else if (type20_depth <= 1)             dist_kind = DIST_BOTH_STICKS_BAD;
+            else if (bit6_pol != 0)                 dist_kind = DIST_PAIR_INTERLEAVE;
+            else                                    dist_kind = DIST_AMBIGUOUS;
+        }
+
         verdict_confidence_t conf = compute_confidence();
-        /* Distributed errors → cap confidence at MEDIUM. Even with a clean
-           stuck-bit signature, we don't know WHICH of the channel pair the
-           bad chip lives on without physical isolation. */
-        if (is_distributed && conf == CONF_HIGH) conf = CONF_MED;
+        /* Distributed errors usually drop confidence to MED — but if we're
+           certain it's both sticks (block-mapped, disjoint ranges), HIGH
+           confidence is honest because we know exactly which sticks. */
+        if (is_distributed && conf == CONF_HIGH &&
+            dist_kind != DIST_BOTH_STICKS_BAD) conf = CONF_MED;
         CHAR16 *conf_str;
         UINT32  conf_col;
         switch (conf) {
@@ -8027,25 +8118,15 @@ static void render_simple_verdict(UINT64 total_ms) {
                             conf_col = COL_FAIL;   break;
         }
 
-        CHAR16 ln[220];
+        /* Build the comma-separated DIMM list once — used in two branches. */
+        CHAR16 dimm_list[220] = {0};
         if (is_distributed) {
-            /* Multiple DIMMs significantly involved — almost certainly
-               channel interleave hiding ONE bad stick. Name them ALL,
-               say plainly "ONE of these — isolate by swapping". */
-            CHAR16 dimm_list[220] = {0};
             for (UINTN k = 0; k < dist_n; k++) {
                 CHAR16 frag[64];
-                if (k == 0)
-                    SPrint(frag, sizeof(frag), L"%a",
-                           (CHAR8*)g_dimms[dist_idx[k]].locator);
-                else
-                    SPrint(frag, sizeof(frag), L" или %a",
-                           (CHAR8*)g_dimms[dist_idx[k]].locator);
-                /* English version uses "or" instead of "или" — switch by lang */
-                if (!g_lang && k > 0)
-                    SPrint(frag, sizeof(frag), L" or %a",
-                           (CHAR8*)g_dimms[dist_idx[k]].locator);
-                /* Append to dimm_list */
+                CHAR16 *sep_ru = (k == 0) ? L"%a" : L", %a";
+                CHAR16 *sep_en = (k == 0) ? L"%a" : L", %a";
+                SPrint(frag, sizeof(frag), g_lang ? sep_en : sep_ru,
+                       (CHAR8*)g_dimms[dist_idx[k]].locator);
                 UINTN have = StrLen(dimm_list);
                 UINTN need = StrLen(frag);
                 if (have + need + 1 < sizeof(dimm_list) / sizeof(CHAR16)) {
@@ -8053,6 +8134,38 @@ static void render_simple_verdict(UINT64 total_ms) {
                         dimm_list[have + c] = frag[c];
                 }
             }
+        }
+
+        CHAR16 ln[260];
+        if (dist_kind == DIST_BOTH_STICKS_BAD) {
+            /* Block-mapped BIOS with disjoint Type 20 ranges. Errors on
+               two DIMMs really mean both sticks have at least one bad
+               chip — NOT interleave hiding a single source. */
+            SPrint(ln, sizeof(ln),
+                T(L"  ЗАМЕНИТЬ ОБЕ:  %s",
+                  L"  REPLACE BOTH:  %s"), dimm_list);
+            gfx_draw_str_color(cx, cy, ln, COL_FAIL);
+            cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Уверенность: %s", L"  Confidence:  %s"), conf_str);
+            gfx_draw_str_color(cx, cy, ln, conf_col);
+            cy += cline + 6;
+            gfx_draw_str_color(cx, cy,
+                T(L"  SMBIOS показывает планки с непересекающимися диапазонами",
+                  L"  SMBIOS reports DIMMs with disjoint address ranges"),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  (не interleave). Значит ошибки на этих планках —",
+                  L"  (no interleave). So errors on these DIMMs really happened"),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  это РЕАЛЬНО на разных физических плашках, обе дефектные.",
+                  L"  on physically separate sticks; both are defective."),
+                COL_DIM); cy += cline + 6;
+        } else if (dist_kind == DIST_PAIR_INTERLEAVE) {
+            /* Real interleave (Type 20 ranges overlap), or BIOS-conflict
+               case where bit-6 polarity strongly skewed toward one channel.
+               Either way — ONE bad chip masquerading as two DIMM labels. */
             SPrint(ln, sizeof(ln),
                 T(L"  ЗАМЕНИТЬ ОДНУ из: %s",
                   L"  REPLACE ONE of:  %s"), dimm_list);
@@ -8064,20 +8177,27 @@ static void render_simple_verdict(UINT64 total_ms) {
                 conf_str);
             gfx_draw_str_color(cx, cy, ln, conf_col);
             cy += cline + 6;
-
             gfx_draw_str_color(cx, cy,
-                T(L"  Ошибки распределены по этим планкам в равной пропорции —",
-                  L"  Errors are distributed across these DIMMs roughly evenly —"),
+                T(L"  Это dual-channel interleave: один дохлый чип на ОДНОЙ",
+                  L"  Dual-channel interleave: one bad chip on ONE stick"),
                 COL_DIM); cy += cline;
             gfx_draw_str_color(cx, cy,
-                T(L"  это типичная картина dual-channel interleave, когда один",
-                  L"  this is the typical dual-channel interleave pattern when"),
+                T(L"  планке маскируется как ошибки на обоих DIMM-именах.",
+                  L"  appears as errors under both DIMM labels."),
                 COL_DIM); cy += cline;
-            gfx_draw_str_color(cx, cy,
-                T(L"  дохлый чип на ОДНОЙ планке маскируется под две.",
-                  L"  one bad chip on ONE stick masquerades as two."),
-                COL_DIM); cy += cline + 6;
-
+            if (bit6_pol == 1 || bit6_pol == 2) {
+                /* Add bit-6 polarity hint when strongly skewed */
+                SPrint(ln, sizeof(ln),
+                    T(L"  Подсказка: ~85%%+ ошибок на физ.адресах с битом 6 = %d",
+                      L"  Hint: ≥85%% of errors at addresses with bit 6 = %d"),
+                    bit6_pol - 1);
+                gfx_draw_str_color(cx, cy, ln, COL_DIM); cy += cline;
+                gfx_draw_str_color(cx, cy,
+                    T(L"  (на стандартном Intel/AMD это один канал из двух).",
+                      L"  (on standard Intel/AMD this means one of the two channels)."),
+                    COL_DIM); cy += cline;
+            }
+            cy += 6;
             gfx_draw_str_color(cx, cy,
                 T(L"  Как определить точную:",
                   L"  How to identify the exact one:"),
@@ -8097,14 +8217,37 @@ static void render_simple_verdict(UINT64 total_ms) {
             gfx_draw_str_color(cx, cy,
                 T(L"     Ошибки остались → дохлая оставшаяся.",
                   L"     Errors still there → the remaining one is bad."),
-                COL_FG); cy += cline;
-            gfx_draw_str_color(cx, cy,
-                T(L"     Ошибки уменьшились но есть → возможно обе.",
-                  L"     Errors reduced but still present → possibly both."),
                 COL_FG); cy += cline + 6;
-
-            /* Show "what was detected" once, attributed to the dominant DIMM
-               (for chip mapping context only — we know location is ambiguous). */
+        } else if (dist_kind == DIST_AMBIGUOUS) {
+            /* BIOS conflict: Type 20 claims interleave depth>1 but ranges
+               disjoint, AND bit-6 polarity is mixed. Can't tell — say so. */
+            SPrint(ln, sizeof(ln),
+                T(L"  ЗАМЕНИТЬ: проверить %s",
+                  L"  REPLACE: check %s"), dimm_list);
+            gfx_draw_str_color(cx, cy, ln, COL_FAIL);
+            cy += cline;
+            SPrint(ln, sizeof(ln),
+                T(L"  Уверенность: %s  (BIOS даёт противоречивые данные)",
+                  L"  Confidence:  %s  (BIOS reports conflicting data)"),
+                conf_str);
+            gfx_draw_str_color(cx, cy, ln, conf_col);
+            cy += cline + 6;
+            gfx_draw_str_color(cx, cy,
+                T(L"  SMBIOS показывает interleave, но без подтверждения через iMC.",
+                  L"  SMBIOS reports interleave but it can't be confirmed via iMC."),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  Это может быть одна планка (interleave) или обе (block-режим).",
+                  L"  Could be one stick (interleave) or both (block mode)."),
+                COL_DIM); cy += cline;
+            gfx_draw_str_color(cx, cy,
+                T(L"  Проверьте плашки физически по одной — это даст ответ.",
+                  L"  Test sticks physically one at a time for definitive answer."),
+                COL_DIM); cy += cline + 6;
+        }
+        if (is_distributed) {
+            /* Common: "what was detected" line shown for every distributed
+               branch. Skip if no clear pattern. */
             gfx_draw_str_color(cx, cy,
                 T(L"  ── Что обнаружено ──",
                   L"  ── What was detected ──"),
@@ -8225,8 +8368,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.20 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.20 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.21 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.21 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -8308,7 +8451,7 @@ static void render_summary(UINT64 total_ms) {
                 CHAR16 chip[64] = L"";
                 if (didx >= 0)
                     chip_label_for_bit((UINT32)didx, bp, chip, 64);
-                /* v0.4.20 — use SMBIOS Type 17 locator string ("DDR4-B2")
+                /* v0.4.21 — use SMBIOS Type 17 locator string ("DDR4-B2")
                    instead of array-index-based "DIMM%d" which had nothing
                    to do with the physical slot label the user sees. */
                 CHAR8 *loc = (didx >= 0 && g_dimms[didx].locator[0])
@@ -10018,7 +10161,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.20 init ===");
+    log_line(L"=== MemForge2 v0.4.21 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -10063,7 +10206,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.20 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.21 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -10078,7 +10221,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.20 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.21 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core
@@ -10693,8 +10836,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                per-test results to survive that. Cheap (1× per test, not
                1× per log line). */
             flush_log_now();
-            /* v0.4.20 — ACCUMULATE across marathon passes, do not OVERWRITE.
-               Pre-v0.4.20 the line was `g_summary[i] = r;` which kept only
+            /* v0.4.21 — ACCUMULATE across marathon passes, do not OVERWRITE.
+               Pre-v0.4.21 the line was `g_summary[i] = r;` which kept only
                the LAST pass's per-test result. On a 16-hour marathon with
                an intermittent error rate of 1 per pass, that meant the
                final summary table showed "errors: 0" because the most

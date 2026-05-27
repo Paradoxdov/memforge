@@ -1,5 +1,5 @@
 /*
- * MemForge2 v0.4.23 — UEFI memory tester written from scratch.
+ * MemForge2 v0.4.24 — UEFI memory tester written from scratch.
  *
  * Latest release: https://github.com/Paradoxdov/memforge/releases
  * For per-version changes see git log / GitHub Releases page.
@@ -416,6 +416,28 @@ static int    g_cfg_buffer_cap_explicit = 0;  /* user set BufferMB in INI? */
    slot numbering). Lets the user verify each stick separately without
    physically removing the others. Set via [Run] TestOnlyDimm=N. */
 static UINT32 g_cfg_test_only_dimm = 0;     /* 0 = all DIMMs (default) */
+
+/* v0.4.24 — auto-isolation state.
+   When the post-test verdict detects "errors on multiple DIMMs, block-
+   mapped Type 20" we offer the user [I] to automatically re-test each
+   affected DIMM with TestOnlyDimm in turn, giving a definitive
+   "REPLACE: DDR4-B2" answer instead of "REPLACE BOTH" guesswork.
+   These globals are populated by render_simple_verdict() during the
+   FAIL branch and consumed by the post-summary key handler. */
+#define MAX_ISO_DIMMS 4
+static int    g_iso_offer = 0;                  /* 1 = show [I] in footer */
+static int    g_iso_dimm_idx[MAX_ISO_DIMMS];    /* 0-based DIMM indices */
+static UINTN  g_iso_dimm_n   = 0;               /* count in g_iso_dimm_idx */
+typedef struct {
+    int     dimm_idx;        /* 0-based */
+    CHAR8   locator[24];     /* SMBIOS locator string */
+    UINT32  errors;          /* errors found in this isolation pass */
+    UINT32  passes;          /* how many passes ran */
+    int     status;          /* 0=not run, 1=alloc failed, 2=ok, 3=aborted */
+} isolation_result_t;
+static isolation_result_t g_iso_results[MAX_ISO_DIMMS];
+static UINTN g_iso_results_n = 0;
+static UINT32 g_iso_kernel = 0;   /* kernel_id_t — that found errors (UINT32 so this can sit before the enum decl) */
 /* Marathon mode: keep cycling the full test for N hours total. Useful for
    shop-overnight runs and intermittent-failure hunting (errors that only
    surface after 2-4 h of sustained load). 0 = disabled (normal behaviour),
@@ -834,7 +856,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.23";
+    CHAR16 *title = L"MEMFORGE v0.4.24";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -938,7 +960,7 @@ static UINTN g_card_cols = 1;
    compute_layout(). */
 static int g_show_cards = 1;
 
-/* v0.4.23 — focused cards layout for small screens (g_h < 900).
+/* v0.4.24 — focused cards layout for small screens (g_h < 900).
    Instead of one full-width row per test (14 rows × ~40 px = 560 px,
    which on a 1024×768 screen eats 70% of vertical space and clips the
    core panel + footer), we draw:
@@ -1008,7 +1030,7 @@ static void compute_layout(UINTN n_tests) {
     g_card_w = g_inner;
     g_card_row_h = g_compact ? g_char_h : (g_char_h + 16);
 
-    /* v0.4.23 — focused layout on small screens.
+    /* v0.4.24 — focused layout on small screens.
        On g_h<900 the per-test card list eats 60-70% of vertical space
        and clips the core panel / footer (YgrecK field report on 1024×768
        Radeon HD 4350). Replace with: 1-row strip of all test dots +
@@ -1222,9 +1244,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.23   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.24   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.23   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.24   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1234,8 +1256,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.23   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
-                 L"  MEMFORGE v0.4.23   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.24   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
+                 L"  MEMFORGE v0.4.24   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1243,16 +1265,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.23  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
-                 L"  MEMFORGE v0.4.23  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
+               T(L"  MEMFORGE v0.4.24  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
+                 L"  MEMFORGE v0.4.24  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.23 | %s | %s | прошло %02d:%02d",
-                 L" MEMFORGE v0.4.23 | %s | %s | elapsed %02d:%02d"),
+               T(L" MEMFORGE v0.4.24 | %s | %s | прошло %02d:%02d",
+                 L" MEMFORGE v0.4.24 | %s | %s | elapsed %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1778,7 +1800,7 @@ static int dominant_dimm_idx(void) {
     return best;
 }
 
-/* v0.4.23 — detect dual-channel interleave ambiguity.
+/* v0.4.24 — detect dual-channel interleave ambiguity.
    On consumer desktops with dual/quad-channel memory, the iMC interleaves
    addresses between channels at 64-byte (cache-line) granularity. A
    SINGLE bad chip on one stick produces errors that, when mapped through
@@ -1787,7 +1809,7 @@ static int dominant_dimm_idx(void) {
 
    Field report from a Habr user (Netac DDR4 kit): same stuck bit
    D[53] was reported 24 times, distributed as A2 (8) + B2 (11) + ? (5).
-   Pre-v0.4.23 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
+   Pre-v0.4.24 verdict confidently said "REPLACE: DDR4-B2 (HIGH)" — but
    physically it's likely ONE bad chip on one of A2/B2, NOT both.
 
    This helper returns the list of DIMM indices that each hold >=25% of
@@ -1833,7 +1855,7 @@ static UINTN distributed_dimm_indices(int *out_idx, UINTN cap) {
     return n;
 }
 
-/* v0.4.23 — Approach D: detect whether SMBIOS Type 20 reports REAL
+/* v0.4.24 — Approach D: detect whether SMBIOS Type 20 reports REAL
    cache-line interleave (overlapping address ranges across DIMMs) or
    BLOCK mapping (disjoint ranges, each DIMM owns its own physical
    region). PassMark forum & KIT paper both confirm that even though
@@ -1877,7 +1899,7 @@ static UINT8 type20_max_interleave_depth(void) {
     return m;
 }
 
-/* v0.4.23 — Approach A: bit-6 polarity analysis of error addresses.
+/* v0.4.24 — Approach A: bit-6 polarity analysis of error addresses.
    On most Intel/AMD consumer dual-channel desktops with DDR4/DDR5, the
    iMC's channel selector is physical address bit 6 (alternating 64-byte
    cache lines between channels). If all error records share the same
@@ -4845,7 +4867,7 @@ static void amd_thermal_probe(void) {
 }
 
 static UINT32 amd_thermal_sample(void) {
-    /* v0.4.23 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
+    /* v0.4.24 — correct decode per Linux k10temp / FreeBSD amdtemp.c:
        SMN 0x59800 (SMU_THM_TCON_CUR_TMP)
          bits [31:21]  raw temperature value (11 bits, mask 0x7FF)
          bit  19       TempRangeSel — when SET, scale is -49°C..+206°C
@@ -4853,7 +4875,7 @@ static UINT32 amd_thermal_sample(void) {
                        scale is 0..225°C (no offset).
        temp_c = (raw * 0.125) - (range_sel ? 49 : 0)
 
-       Pre-v0.4.23 code was missing both the 0x7FF mask AND the bit-19
+       Pre-v0.4.24 code was missing both the 0x7FF mask AND the bit-19
        range adjustment, which inflated readings by ~49°C on Ryzen SKUs
        that report on the -49..206 scale (most Renoir/Cezanne/Zen3+
        desktop parts). Field report on Ryzen 5 4500 showed Tctl=93°C at
@@ -6473,7 +6495,7 @@ static test_def_t g_tests[] = {
 };
 #define N_TESTS (sizeof(g_tests) / sizeof(g_tests[0]))
 
-/* v0.4.23 — map a kernel enum (KER_*) to its position in g_tests[].
+/* v0.4.24 — map a kernel enum (KER_*) to its position in g_tests[].
    CRITICAL: do NOT index g_tests[] directly by a kernel_id_t value.
    The enum values do not match array positions (e.g., KER_AVX2_SUSTAINED
    = 12 maps to position 0 in g_tests because AVX2 Sustained is the
@@ -6625,7 +6647,7 @@ typedef struct {
 } card_info_t;
 static card_info_t g_cards[N_TESTS];
 
-/* v0.4.23 — Forward decls for focused-mode helpers (defined below
+/* v0.4.24 — Forward decls for focused-mode helpers (defined below
    card_paint so they can share the same color-lookup logic). */
 static void card_paint_full(UINTN i);
 static void card_strip_paint(UINTN i);
@@ -6739,7 +6761,7 @@ static void card_paint_full(UINTN i) {
     }
 }
 
-/* ---------- Focused-mode card painters (v0.4.23) ---------- */
+/* ---------- Focused-mode card painters (v0.4.24) ---------- */
 
 /* Paint the small status dot for test i in the top strip. The strip is
    one row tall and shows N evenly-spaced dots, one per test. The dot
@@ -6822,7 +6844,7 @@ static void card_focused_paint(UINTN i) {
     blt_fill(ix, row3_y, iw, row_h, COL_PANEL);
 
     /* Row 1: test name (left) + short description in dim color + index counter (right).
-       v0.4.23 — description lets non-expert user know what the test
+       v0.4.24 — description lets non-expert user know what the test
        actually checks (TRRespass / March-C- / Butterfly etc. are jargon). */
     say_at_px(ix + 4, row1_y, g_tests[i].name);
     UINTN name_chars = StrLen(g_tests[i].name);
@@ -7107,7 +7129,7 @@ static void core_cols_compute(core_cols_t *c) {
     if (slack >= 9 * cw + pad) { w_freq = 9 * cw; slack -= w_freq + pad; }
     /* Priority 4: Per-core MB/s — 6 chars */
     if (slack >= 6 * cw + pad) { w_mbs  = 6 * cw; slack -= w_mbs  + pad; }
-    /* v0.4.23 — "Смещ" (buffer-offset for this core's slice) column dropped
+    /* v0.4.24 — "Смещ" (buffer-offset for this core's slice) column dropped
        from the main test screen. It was a developer-debug field that nobody
        in the field could interpret; removing it frees ~9 chars to widen the
        activity bar. The offset is still in the log and the JSON. */
@@ -7473,8 +7495,8 @@ static void drain_conin(void) {
     }
 }
 
-/* v0.4.23 — countdown UX rework.
-   Pre-v0.4.23: ESC meant "skip the wait and start the test now" — which
+/* v0.4.24 — countdown UX rework.
+   Pre-v0.4.24: ESC meant "skip the wait and start the test now" — which
    completely contradicts the universal "ESC = cancel" convention. Users
    pressed ESC expecting "I don't want this test" and instead launched it.
 
@@ -7955,9 +7977,359 @@ static int verdict_describe_what_broke(CHAR16 *line1, UINTN cap1,
     return n;
 }
 
+/* ---------- v0.4.24 Auto-isolation feature ----------
+   When the post-test verdict detects "errors on 2+ DIMMs in block-mapped
+   Type 20", we can definitively identify the bad stick(s) by re-running
+   the failing test on each DIMM in turn with TestOnlyDimm, instead of
+   asking the user to physically pull DIMMs. Block-mapped is required:
+   on real cache-line interleave, TestOnlyDimm doesn't physically isolate
+   because the iMC still alternates between channels.                  */
+
+/* Pick the kernel that found the most error records (used to focus the
+   isolation re-test on the test that actually catches the fault). Falls
+   back to KER_AVX2_SUSTAINED (a strong sustained-load test) when no
+   error records exist. */
+static UINT32 isolation_pick_kernel(void) {
+    UINT32 counts[64] = {0};        /* indexed by kernel_id_t (well below 64) */
+    UINT32 shown = g_err_count > MAX_ERR_RECORDS ? MAX_ERR_RECORDS : g_err_count;
+    for (UINT32 i = 0; i < shown; i++) {
+        UINT32 k = (UINT32)g_err_records[i].test;
+        if (k < 64) counts[k]++;
+    }
+    UINT32 best_k = (UINT32)KER_AVX2_SUSTAINED;
+    UINT32 best_n = 0;
+    for (UINT32 k = 0; k < 64; k++) {
+        if (counts[k] > best_n) { best_n = counts[k]; best_k = k; }
+    }
+    return best_k;
+}
+
+/* Render the live "isolating DDR4-A2 / running test..." panel. */
+static void render_isolation_progress(UINTN current_dimm_k,
+                                       UINTN total_dimms,
+                                       CHAR8 *current_locator,
+                                       CHAR16 *kernel_name,
+                                       UINT32 current_pass,
+                                       UINT32 total_passes,
+                                       UINT64 elapsed_ms,
+                                       UINT64 errors_so_far) {
+    cls();
+    UINT32 strip_col = COL_ACCENT;
+    UINT32 strip_dk  = COL_ACCENT_DK;
+    blt_gradient_v(0, 0, g_w, g_char_h * 2, strip_col, strip_dk);
+    blt_fill(0, g_char_h * 2 - 2, g_w, 2, COL_ACCENT_HI);
+
+    CHAR16 title[120];
+    SPrint(title, sizeof(title),
+           T(L"АВТО-ИЗОЛЯЦИЯ ПЛАНОК — %d из %d",
+             L"AUTO-ISOLATION — %d of %d"),
+           (UINT32)(current_dimm_k + 1), (UINT32)total_dimms);
+    verdict_say_centered(title, g_char_h / 2, COL_FG, 1);
+
+    UINTN cy = g_char_h * 4;
+    UINTN cx = g_w / 6;
+    UINTN cline = g_char_h + 4;
+    CHAR16 buf[200];
+
+    SPrint(buf, sizeof(buf),
+           T(L"  Проверяю планку:  %a",
+             L"  Testing DIMM:     %a"),
+           current_locator);
+    gfx_draw_str_color(cx, cy, buf, COL_ACCENT_HI); cy += cline;
+
+    SPrint(buf, sizeof(buf),
+           T(L"  Тест:             %s",
+             L"  Test:             %s"),
+           kernel_name);
+    gfx_draw_str_color(cx, cy, buf, COL_FG); cy += cline;
+
+    SPrint(buf, sizeof(buf),
+           T(L"  Проход:           %d из %d",
+             L"  Pass:             %d of %d"),
+           current_pass, total_passes);
+    gfx_draw_str_color(cx, cy, buf, COL_FG); cy += cline;
+
+    UINT64 sec = elapsed_ms / 1000;
+    SPrint(buf, sizeof(buf),
+           T(L"  Прошло:           %d:%02d",
+             L"  Elapsed:          %d:%02d"),
+           (UINT32)(sec / 60), (UINT32)(sec % 60));
+    gfx_draw_str_color(cx, cy, buf, COL_FG); cy += cline + 6;
+
+    SPrint(buf, sizeof(buf),
+           T(L"  Ошибок пока:      %ld",
+             L"  Errors so far:    %ld"),
+           errors_so_far);
+    gfx_draw_str_color(cx, cy, buf,
+                       errors_so_far > 0 ? COL_FAIL : COL_OK); cy += cline + 6;
+
+    gfx_draw_str_color(cx, cy,
+        T(L"  [ESC] = прервать изоляцию и вернуться к вердикту",
+          L"  [ESC] = abort isolation and return to verdict"),
+        COL_DIM);
+}
+
+/* Re-allocate test buffer constrained to a specific DIMM's address range,
+   run the target kernel `n_passes` times, count errors, free.
+   On entry the original whole-RAM buffer must have been freed.
+   On return the original allocation is NOT restored — caller is responsible
+   for re-allocating after all isolation work completes.
+   Records that the isolation produces are TRUNCATED from g_err_records[]
+   so they don't pollute the original verdict's data; the function returns
+   just the error count for this run. */
+static void run_isolation_for_dimm(UINTN dimm_idx, UINT32 kernel,
+                                    UINT32 n_passes,
+                                    isolation_result_t *out) {
+    out->dimm_idx = (int)dimm_idx;
+    out->errors = 0;
+    out->passes = 0;
+    out->status = 0;
+    for (UINTN c = 0; c < sizeof(out->locator); c++) {
+        out->locator[c] = (dimm_idx < g_dimm_count) ? g_dimms[dimm_idx].locator[c] : 0;
+    }
+
+    /* Temporarily switch the global to ask alloc_test_buffer() to pin
+       the allocation to this DIMM's physical range. */
+    UINT32 saved_only = g_cfg_test_only_dimm;
+    UINT32 saved_buf  = g_cfg_buffer_cap_mb;
+    g_cfg_test_only_dimm = (UINT32)(dimm_idx + 1);
+    /* Smaller buffer for isolation — 256 MB is plenty to surface
+       intermittent bit failures within a few minutes per pass. */
+    g_cfg_buffer_cap_mb = 256;
+
+    EFI_STATUS s = alloc_test_buffer();
+    if (EFI_ERROR(s) || g_mem_addr == 0) {
+        out->status = 1;            /* alloc failed */
+        g_cfg_test_only_dimm = saved_only;
+        g_cfg_buffer_cap_mb  = saved_buf;
+        CHAR16 lb[160];
+        SPrint(lb, sizeof(lb),
+               L"[ISO] %a: alloc failed within DIMM range (status=0x%lx)",
+               (CHAR8*)g_dimms[dimm_idx].locator, (UINT64)s);
+        log_line(lb);
+        return;
+    }
+
+    {
+        CHAR16 lb[180];
+        SPrint(lb, sizeof(lb),
+               L"[ISO] %a: alloc OK at 0x%lx, %ld pages — running %s for %d passes",
+               (CHAR8*)g_dimms[dimm_idx].locator, (UINT64)g_mem_addr,
+               (UINT64)g_mem_pages, name_for_kernel(kernel), n_passes);
+        log_line(lb);
+    }
+
+    /* Snapshot error-record count so we can extract our delta and then
+       truncate them out (verdict data is preserved). */
+    UINT32 err_snapshot = g_err_count;
+    UINT64 t_start = ms_now();
+    CHAR16 *kname = name_for_kernel(kernel);
+
+    /* run_test_mc expects an INDEX into g_tests[], not a kernel_id_t enum value
+       — translate via the helper (the same bug that affected pre-v0.4.20 verdict
+       text would happen here if we passed `kernel` straight in). */
+    int test_idx = tests_idx_for_kernel((kernel_id_t)kernel);
+    if (test_idx < 0) {
+        log_line(L"[ISO] kernel id not found in g_tests[] — falling back to AVX2 Sustained");
+        test_idx = tests_idx_for_kernel(KER_AVX2_SUSTAINED);
+        if (test_idx < 0) {
+            out->status = 1;
+            free_test_buffer();
+            g_cfg_test_only_dimm = saved_only;
+            g_cfg_buffer_cap_mb  = saved_buf;
+            return;
+        }
+    }
+
+    for (UINT32 p = 0; p < n_passes; p++) {
+        if (g_aborted) { out->status = 3; break; }
+        /* Reset g_aborted poll state between passes (keep it abortable but
+           don't carry over the user's earlier ESC from countdown). */
+        render_isolation_progress(0, 0,                /* outer counters set by caller */
+                                  g_dimms[dimm_idx].locator,
+                                  kname, p + 1, n_passes,
+                                  ms_now() - t_start,
+                                  g_err_count - err_snapshot);
+        test_summary_t r = run_test_mc((UINTN)test_idx);
+        out->passes++;
+        out->errors += (UINT32)r.errors;
+        CHAR16 lb[160];
+        SPrint(lb, sizeof(lb),
+               L"[ISO]   pass %d/%d: errors=%ld",
+               p + 1, n_passes, r.errors);
+        log_line(lb);
+    }
+    if (out->status != 3) out->status = 2;
+
+    /* Truncate isolation error records so they don't appear in the
+       original verdict / report.json error list. */
+    g_err_count = err_snapshot;
+
+    free_test_buffer();
+    g_cfg_test_only_dimm = saved_only;
+    g_cfg_buffer_cap_mb  = saved_buf;
+}
+
+/* Orchestrate full auto-isolation: re-test each DIMM in g_iso_dimm_idx[]
+   with the kernel that found the original errors. Populates g_iso_results.
+   On entry: original whole-RAM buffer is allocated.
+   On exit:  original whole-RAM buffer is re-allocated and tests can resume
+             normally (in practice the caller goes back to verdict screen). */
+static void do_auto_isolation(void) {
+    log_line(L"[ISO] === auto-isolation started ===");
+    UINT32 k = isolation_pick_kernel();
+    g_iso_kernel = k;
+    {
+        CHAR16 lb[200];
+        SPrint(lb, sizeof(lb),
+               L"[ISO] target kernel = %s; %d DIMM(s) to test",
+               name_for_kernel(k), (UINT32)g_iso_dimm_n);
+        log_line(lb);
+    }
+
+    /* Free the current whole-RAM buffer so DIMM-range allocations are free
+       to claim those pages. */
+    free_test_buffer();
+
+    g_iso_results_n = 0;
+    for (UINTN i = 0; i < g_iso_dimm_n && i < MAX_ISO_DIMMS; i++) {
+        if (g_aborted) break;
+        UINTN dimm_idx = (UINTN)g_iso_dimm_idx[i];
+        /* Show initial frame for this DIMM */
+        render_isolation_progress(i, g_iso_dimm_n,
+                                  g_dimms[dimm_idx].locator,
+                                  name_for_kernel(k), 1, 3,
+                                  0, 0);
+        run_isolation_for_dimm(dimm_idx, k, 3, &g_iso_results[i]);
+        g_iso_results_n = i + 1;
+    }
+
+    /* Re-allocate the whole-RAM buffer so subsequent rendering / actions
+       work normally. If it fails we just leave g_mem_addr=0 — verdict
+       screen doesn't need the buffer. */
+    g_cfg_test_only_dimm = 0;
+    alloc_test_buffer();
+
+    log_line(L"[ISO] === auto-isolation finished ===");
+}
+
+/* Render the post-isolation result screen with per-DIMM error counts and
+   the new definitive verdict. */
+static void render_isolation_verdict(void) {
+    cls();
+    blt_gradient_v(0, 0, g_w, g_char_h * 2, COL_FAIL, COL_FAIL_DK);
+    blt_fill(0, g_char_h * 2 - 2, g_w, 2, COL_ACCENT_HI);
+    verdict_say_centered(T(L"РЕЗУЛЬТАТ АВТО-ИЗОЛЯЦИИ", L"AUTO-ISOLATION RESULT"),
+                         g_char_h / 2, COL_FG, 1);
+
+    UINTN cy = g_char_h * 4;
+    UINTN cx = g_w / 8;
+    UINTN cline = g_char_h + 4;
+    CHAR16 buf[200];
+
+    SPrint(buf, sizeof(buf),
+           T(L"  Использован тест:  %s   (%d прохода по 256 МБ на планке)",
+             L"  Test used:         %s   (%d passes of 256 MB per DIMM)"),
+           name_for_kernel(g_iso_kernel), 3);
+    gfx_draw_str_color(cx, cy, buf, COL_DIM); cy += cline + 6;
+
+    /* Count bad/clean */
+    int bad_count = 0, alloc_fail_count = 0;
+    int single_bad_idx = -1;
+    for (UINTN i = 0; i < g_iso_results_n; i++) {
+        if (g_iso_results[i].status == 1) alloc_fail_count++;
+        else if (g_iso_results[i].errors > 0) { bad_count++; single_bad_idx = (int)i; }
+    }
+
+    /* Per-DIMM rows */
+    for (UINTN i = 0; i < g_iso_results_n; i++) {
+        isolation_result_t *r = &g_iso_results[i];
+        UINT32 col = COL_FG;
+        CHAR16 *mark;
+        if (r->status == 1) { mark = T(L"✗ ALLOC FAIL", L"✗ ALLOC FAIL"); col = COL_RUN; }
+        else if (r->status == 3) { mark = T(L"⊘ ОТМЕНА", L"⊘ ABORTED"); col = COL_DIM; }
+        else if (r->errors > 0) { mark = T(L"✗ НЕИСПРАВНА", L"✗ FAULTY"); col = COL_FAIL; }
+        else { mark = T(L"✓ ЧИСТАЯ", L"✓ CLEAN"); col = COL_OK; }
+        SPrint(buf, sizeof(buf),
+               T(L"  %-12a  %s   ·   %d ошибок за %d прохода",
+                 L"  %-12a  %s   ·   %d errors in %d passes"),
+               (CHAR8*)r->locator, mark, r->errors, r->passes);
+        gfx_draw_str_color(cx, cy, buf, col); cy += cline;
+    }
+    cy += cline;
+
+    /* Final definitive verdict */
+    if (alloc_fail_count > 0 && bad_count == 0) {
+        gfx_draw_str_color(cx, cy,
+            T(L"  ⚠ Изоляция неполная — часть планок недоступна для аллокации",
+              L"  ⚠ Isolation incomplete — some DIMMs failed allocation"),
+            COL_RUN); cy += cline;
+        gfx_draw_str_color(cx, cy,
+            T(L"  (firmware-reserved memory holes). Проверьте физически.",
+              L"  (firmware-reserved memory holes). Test physically."),
+            COL_DIM); cy += cline;
+    } else if (bad_count == 0) {
+        gfx_draw_str_color(cx, cy,
+            T(L"  ⚠ За 3 прохода ошибки не воспроизвелись.",
+              L"  ⚠ Errors did not reproduce in 3 passes."),
+            COL_RUN); cy += cline;
+        gfx_draw_str_color(cx, cy,
+            T(L"  Возможно очень редкий intermittent — запустите Marathon",
+              L"  Likely very rare intermittent — try Marathon"),
+            COL_DIM); cy += cline;
+        gfx_draw_str_color(cx, cy,
+            T(L"  или проверьте физической подменой по одной планке.",
+              L"  or test by physically swapping one DIMM at a time."),
+            COL_DIM); cy += cline;
+    } else if (bad_count == 1) {
+        SPrint(buf, sizeof(buf),
+            T(L"  ▶ ТОЧНО:   ЗАМЕНИТЬ %a",
+              L"  ▶ DEFINITIVE: REPLACE %a"),
+            (CHAR8*)g_iso_results[single_bad_idx].locator);
+        gfx_draw_str_color(cx, cy, buf, COL_FAIL); cy += cline;
+        gfx_draw_str_color(cx, cy,
+            T(L"     Уверенность: ВЫСОКАЯ (подтверждено изоляцией)",
+              L"     Confidence:  HIGH (confirmed by isolation)"),
+            COL_OK); cy += cline;
+    } else {
+        /* bad_count >= 2 — both/all planks bad */
+        gfx_draw_str_color(cx, cy,
+            T(L"  ▶ ТОЧНО:   ЗАМЕНИТЬ ВСЕ ПОМЕЧЕННЫЕ ✗",
+              L"  ▶ DEFINITIVE: REPLACE ALL MARKED ✗"),
+            COL_FAIL); cy += cline;
+        gfx_draw_str_color(cx, cy,
+            T(L"     Уверенность: ВЫСОКАЯ (подтверждено изоляцией)",
+              L"     Confidence:  HIGH (confirmed by isolation)"),
+            COL_OK); cy += cline;
+    }
+
+    UINTN foot_y = g_h - g_char_h - 8;
+    blt_fill(0, foot_y - 4, g_w, g_char_h + 8, COL_PANEL_ALT);
+    blt_fill(0, foot_y - 5, g_w, 1, COL_BORDER);
+    verdict_say_centered(
+        T(L"[D] обратно к вердикту   [M] меню   [ESC] перезагрузка",
+          L"[D] back to verdict   [M] menu   [ESC] reboot"),
+        foot_y, COL_ACCENT_HI, 1);
+
+    /* Also log the result for offline review. */
+    for (UINTN i = 0; i < g_iso_results_n; i++) {
+        CHAR16 lb[200];
+        SPrint(lb, sizeof(lb),
+               L"[ISO] result: %a status=%d errors=%d passes=%d",
+               (CHAR8*)g_iso_results[i].locator,
+               g_iso_results[i].status,
+               g_iso_results[i].errors,
+               g_iso_results[i].passes);
+        log_line(lb);
+    }
+}
+
 static void render_simple_verdict(UINT64 total_ms) {
     cls();
     verdict_kind_t v = compute_verdict_kind();
+    /* v0.4.24 — reset isolation offer; will be enabled below if applicable. */
+    g_iso_offer = 0;
+    g_iso_dimm_n = 0;
 
     /* Header strip color matches the verdict — green/yellow/red gradient */
     UINT32 strip_col, strip_dk, strip_hi;
@@ -8113,7 +8485,7 @@ static void render_simple_verdict(UINT64 total_ms) {
         UINTN dist_n = distributed_dimm_indices(dist_idx, MAX_DIMMS);
         int is_distributed = (dist_n >= 2);
 
-        /* v0.4.23 — Approach D + A: classify WHY errors are distributed.
+        /* v0.4.24 — Approach D + A: classify WHY errors are distributed.
              type20_overlap = 1 → ranges overlap (real cache-line interleave)
                                   → "ONE chip behind two labels"
              type20_overlap = 0, depth ≤ 1 → block mode (disjoint ranges,
@@ -8193,6 +8565,25 @@ static void render_simple_verdict(UINT64 total_ms) {
                 T(L"  это РЕАЛЬНО на разных физических плашках, обе дефектные.",
                   L"  on physically separate sticks; both are defective."),
                 COL_DIM); cy += cline + 6;
+            /* v0.4.24 — offer auto-isolation: re-test each DIMM in its own
+               physical address range to confirm WHICH ones are actually
+               bad (vs symptom of one chip pretending to be two). Block-
+               mapped Type 20 is the precondition — on real cache-line
+               interleave TestOnlyDimm doesn't physically isolate. */
+            if (g_cfg_test_only_dimm == 0 && dist_n >= 2 && dist_n <= MAX_ISO_DIMMS) {
+                g_iso_offer = 1;
+                g_iso_dimm_n = dist_n;
+                for (UINTN k = 0; k < dist_n; k++)
+                    g_iso_dimm_idx[k] = dist_idx[k];
+                gfx_draw_str_color(cx, cy,
+                    T(L"  ▶ Подтвердить: нажмите [I] чтобы прога сама проверила",
+                      L"  ▶ Confirm: press [I] for the program to test each"),
+                    COL_ACCENT_HI); cy += cline;
+                gfx_draw_str_color(cx, cy,
+                    T(L"     каждую планку по отдельности (~5 мин).",
+                      L"     DIMM in isolation (~5 min)."),
+                    COL_ACCENT_HI); cy += cline + 6;
+            }
         } else if (dist_kind == DIST_PAIR_INTERLEAVE) {
             /* Real interleave (Type 20 ranges overlap), or BIOS-conflict
                case where bit-6 polarity strongly skewed toward one channel.
@@ -8377,15 +8768,23 @@ static void render_simple_verdict(UINT64 total_ms) {
         }
     }
 
-    /* Footer hint — same key handling as the technical summary, plus [D]. */
+    /* Footer hint — same key handling as the technical summary, plus [D].
+       v0.4.24: [I] for auto-isolation when offered. */
     UINTN foot_y = g_h - g_char_h - 8;
     blt_fill(0, foot_y - 4, g_w, g_char_h + 8, COL_PANEL_ALT);
     blt_fill(0, foot_y - 5, g_w, 1, COL_BORDER);
-    CHAR16 footer[200];
-    SPrint(footer, sizeof(footer),
-           T(L"[D] технические детали     [M] меню     [ESC] перезагрузка     [L] %s",
-             L"[D] technical details     [M] menu     [ESC] reboot     [L] %s"),
-           g_lang ? L"RU" : L"EN");
+    CHAR16 footer[260];
+    if (g_iso_offer) {
+        SPrint(footer, sizeof(footer),
+               T(L"[I] авто-изоляция   [D] технические детали   [M] меню   [ESC] перезагрузка   [L] %s",
+                 L"[I] auto-isolation   [D] technical details   [M] menu   [ESC] reboot   [L] %s"),
+               g_lang ? L"RU" : L"EN");
+    } else {
+        SPrint(footer, sizeof(footer),
+               T(L"[D] технические детали     [M] меню     [ESC] перезагрузка     [L] %s",
+                 L"[D] technical details     [M] menu     [ESC] reboot     [L] %s"),
+               g_lang ? L"RU" : L"EN");
+    }
     verdict_say_centered(footer, foot_y, COL_ACCENT_HI, 1);
 }
 
@@ -8399,8 +8798,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.23 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.23 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.24 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.24 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -8482,7 +8881,7 @@ static void render_summary(UINT64 total_ms) {
                 CHAR16 chip[64] = L"";
                 if (didx >= 0)
                     chip_label_for_bit((UINT32)didx, bp, chip, 64);
-                /* v0.4.23 — use SMBIOS Type 17 locator string ("DDR4-B2")
+                /* v0.4.24 — use SMBIOS Type 17 locator string ("DDR4-B2")
                    instead of array-index-based "DIMM%d" which had nothing
                    to do with the physical slot label the user sees. */
                 CHAR8 *loc = (didx >= 0 && g_dimms[didx].locator[0])
@@ -10193,7 +10592,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.23 init ===");
+    log_line(L"=== MemForge2 v0.4.24 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
@@ -10238,7 +10637,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 if (uefi_call_wrapper(g_gop->QueryMode, 4,
                                       g_gop, m, &info_sz, &info) != EFI_SUCCESS)
                     continue;
-                /* v0.4.23 — also log PixelFormat and PixelsPerScanLine
+                /* v0.4.24 — also log PixelFormat and PixelsPerScanLine
                    so we can see if a card (e.g. old Radeon HD 4350) only
                    offers BltOnly modes (PixelFormat=3) that prevent
                    direct-fb rendering. */
@@ -10253,7 +10652,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             log_line(L"[GFX] NO GOP PROTOCOL FOUND — firmware has no UEFI graphics. "
                      L"Falling back to 800x600 default. UI will not render correctly.");
         }
-        /* v0.4.23 — MP Services Protocol diagnostic. Without this log it
+        /* v0.4.24 — MP Services Protocol diagnostic. Without this log it
            was impossible to tell from a field report whether multi-core
            dispatch failed (LocateProtocol error / GetNumberOfProcessors
            returned 1) or the test was simply running on a single-core
@@ -10855,7 +11254,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
             g_cards[i].errors = 0;
             card_paint(i);
 
-            /* v0.4.23 — countdown returns 0=start, 1=skip this test, 2=abort run */
+            /* v0.4.24 — countdown returns 0=start, 1=skip this test, 2=abort run */
             int cd_rc = countdown(2, i);
             if (cd_rc == 2) break;          /* Q → abort whole run */
             if (cd_rc == 1) {                /* ESC → skip this test */
@@ -10872,7 +11271,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 done_tests++;
                 continue;
             }
-            /* v0.4.23 — clear the countdown footer once the test starts.
+            /* v0.4.24 — clear the countdown footer once the test starts.
                The old "[N/14] Test starts in 2 sec ..." line would linger
                throughout the test run, taking up screen space without
                serving any purpose during the test itself. Replace with a
@@ -10898,8 +11297,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                per-test results to survive that. Cheap (1× per test, not
                1× per log line). */
             flush_log_now();
-            /* v0.4.23 — ACCUMULATE across marathon passes, do not OVERWRITE.
-               Pre-v0.4.23 the line was `g_summary[i] = r;` which kept only
+            /* v0.4.24 — ACCUMULATE across marathon passes, do not OVERWRITE.
+               Pre-v0.4.24 the line was `g_summary[i] = r;` which kept only
                the LAST pass's per-test result. On a 16-hour marathon with
                an intermittent error rate of 1 per pass, that meant the
                final summary table showed "errors: 0" because the most
@@ -11154,6 +11553,20 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                        /* Cyrillic ь/Ь = same physical key as M on RU layout */
                        k.UnicodeChar == 0x044C || k.UnicodeChar == 0x042C) {
                 leave_summary = 1;        /* fall through → main menu */
+            } else if ((k.UnicodeChar == L'i' || k.UnicodeChar == L'I' ||
+                        /* Cyrillic ш/Ш = same physical key as I on RU layout */
+                        k.UnicodeChar == 0x0448 || k.UnicodeChar == 0x0428)
+                       && g_iso_offer) {
+                /* v0.4.24 — auto-isolation: re-test each affected DIMM with
+                   TestOnlyDimm, give a definitive REPLACE answer. */
+                do_auto_isolation();
+                render_isolation_verdict();
+                /* view_mode stays at "isolation result"; user can [D] to
+                   go back to original simple verdict (the unconditional
+                   `view_mode = !view_mode` above flips truthy→0, so D
+                   correctly re-renders the simple verdict). */
+                view_mode = 2;             /* sentinel for "in isolation result" */
+                g_iso_offer = 0;           /* don't re-offer */
             }
             /* Any other key — explicitly ignored. The view stays put. */
         }

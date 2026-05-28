@@ -203,3 +203,21 @@ from the user's perspective.
   without explicit permission.
 - `gh` CLI is not installed; use the GitHub REST API with the token
   cached in Windows Credential Manager (`git:https://github.com`).
+
+## 8. Deployment vocabulary — "git" always means push + release
+
+When the project owner says **"гит" / "на гит" / "загрузи на гит"** (or the
+English equivalent), it means the FULL package, every time:
+
+1. `git push` the commit(s) to `origin/main`, AND
+2. create the matching GitHub **release** for the new version (tag `vX.Y.Z`
+   from the pushed commit + upload `MemForge2.efi` as the asset).
+
+Never push a version without also cutting the release — they are one unit.
+The owner stated this explicitly: *"если я говорю гит значит и то и другое,
+всегда комплект."*
+
+- **The USB flash is SEPARATE.** Only write to the stick(s) when the owner
+  says "флешка" / "на флешку". "гит" does NOT imply flashing.
+- A pure docs/rules commit (this file, `.gitignore`, `DEVLOG.local.md`) has no
+  version to release — push it, but no GitHub release is expected for it.

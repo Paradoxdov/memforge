@@ -221,3 +221,36 @@ The owner stated this explicitly: *"если я говорю гит значит
   says "флешка" / "на флешку". "гит" does NOT imply flashing.
 - A pure docs/rules commit (this file, `.gitignore`, `DEVLOG.local.md`) has no
   version to release — push it, but no GitHub release is expected for it.
+
+## 9. Always archive logs into field-logs/ — including user-supplied ones
+
+The `field-logs/` folder (gitignored — never goes to the public repo) is the
+permanent home for every hardware log Claude sees. Two sources, BOTH must be
+saved without being asked:
+
+1. **Logs read off a USB stick** before it gets re-flashed (the old
+   `memforge2.log` / `report.json` get overwritten on the next run).
+2. **Logs the owner hands over** — pasted, attached, or dropped into
+   `Downloads/` (e.g. a Habr commenter's `report (2).json` /
+   `memforge2 (2).log`). The owner stated this explicitly: *"когда даю логи
+   пользователей их тоже сохраняй."*
+
+Save them the moment they're given/read, before doing anything that could
+lose them. Use a dated, descriptive subfolder:
+`field-logs/<who>/YYYY-MM-DD_<machine>_<cpu-or-owner>_<symptom>/` and give each
+file a name that records run #, date, version, and verdict so the pile stays
+navigable. This is diagnostic working data — never commit it, never quote
+machine/BIOS/serial details from it in a public reply (see §5).
+
+**Split by source — two top-level buckets:**
+- `field-logs/mine/`  — the owner's own bench machines (his Dell OptiPlex
+  units etc.). These are HIS hardware; he may choose to publish a curated
+  subset (see below).
+- `field-logs/users/` — logs handed over by forum/issue users (e.g. RoVRy's
+  MSI/7900X). These are SOMEONE ELSE's machines and must NEVER be published
+  or quoted with identifying detail — privacy is not the owner's to give away.
+
+The whole `field-logs/` tree stays gitignored (private working data). If the
+owner wants real-world example reports in the public repo, copy a CURATED set
+of HIS OWN logs only into a tracked `docs/examples/` (or similar) folder —
+never the users' ones, and consider redacting RAM serial numbers first.

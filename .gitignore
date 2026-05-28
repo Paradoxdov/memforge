@@ -21,6 +21,11 @@ PreLoader.efi
 QuantAI.efi
 NvVars
 
+# --- Archived field logs (user hardware logs Claude saves for analysis) ---
+# Never goes to the public repo: contains user machine/BIOS/serial details
+# and is diagnostic working data, not source.
+field-logs/
+
 # --- Test logs and qemu state ---
 memforge2.log
 qemu_run.log

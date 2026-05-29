@@ -140,6 +140,18 @@ hangs) take priority over feature requests. Thanks for your patience.
   by its SPD serial number — and follows it correctly even when the stick is
   moved to a different slot. Validated against a known-bad module across
   slot swaps on OptiPlex 9020/7020.
+
+  **Coverage of exact (serial + slot) identification** — the address map is
+  matched from a self-validating table, so a row that doesn't fit the silicon
+  is skipped and the tool never mis-attributes:
+
+  | Platform | Exact bad-stick ID |
+  |----------|--------------------|
+  | Intel **DDR3, dual-channel** — Sandy Bridge / Ivy Bridge / Haswell (OptiPlex 3010/7010/9010/3020/7020/9020 and kin) | ✓ recovered & validated |
+  | DDR4 / DDR5 / Skylake and newer / AMD | ↩ safe fallback to SMBIOS Type-20 (old behaviour — honest, but no exact slot) |
+
+  Fallback is never wrong, just less precise; new platforms are added as one
+  table row once validated against a known-bad module on that hardware.
 - **Auto-isolation** — when the post-test verdict finds errors spread
   across multiple DIMM address ranges, the program automatically re-runs
   the failing kernel against each affected stick in turn (constraining

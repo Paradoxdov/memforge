@@ -1,5 +1,5 @@
 /*
- * MemForge2 v0.4.48 — UEFI memory tester written from scratch.
+ * MemForge2 v0.4.52 — UEFI memory tester written from scratch.
  *
  * Latest release: https://github.com/Paradoxdov/memforge/releases
  * For per-version changes see git log / GitHub Releases page.
@@ -236,6 +236,12 @@ static EFI_MP_SERVICES_PROTOCOL     *g_mp  = NULL;
 static UINTN g_w = 0, g_h = 0;
 static EFI_FILE_PROTOCOL *g_logfile = NULL;
 static EFI_FILE_PROTOCOL *g_logroot = NULL;  /* kept open for report.json */
+/* v0.4.52 — early-log buffer. GOP picker / INI / MP-services lines are emitted
+   BEFORE the log file can be opened (the boot FS handle is needed first). Rather
+   than drop them, buffer here and flush once the file opens, so the log starts
+   from the very first line — invaluable for debugging the GOP picker. */
+static CHAR8  g_early_buf[8192];
+static UINTN  g_early_len = 0;
 static UINTN g_n_cores = 1, g_n_enabled = 1;
 /* v0.4.47 — SMT topology. g_smt_sibling[i]=1 if logical core i is a secondary
    thread of its physical core (EFI_PROCESSOR_INFORMATION.Location.Thread != 0).
@@ -885,7 +891,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.48";
+    CHAR16 *title = L"MEMFORGE v0.4.52";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -908,7 +914,6 @@ static void clear_row(UINTN row) {
 }
 
 static void log_line(CHAR16 *s) {
-    if (!g_logfile) return;
     /* Encode CHAR16 (UTF-16) to UTF-8 so Cyrillic etc. survive into the log
        file. The previous "just drop the high byte" trick mangled Russian
        into random control chars (e.g. "ВСЕГО" → "! (").  */
@@ -930,6 +935,14 @@ static void log_line(CHAR16 *s) {
     }
     buf[i++] = '\n';
     UINTN len = i;
+    if (!g_logfile) {
+        /* File not open yet — stash for flush_early_log() to emit on open. */
+        if (g_early_len + len <= sizeof(g_early_buf)) {
+            for (UINTN c = 0; c < len; c++) g_early_buf[g_early_len + c] = buf[c];
+            g_early_len += len;
+        }
+        return;
+    }
     uefi_call_wrapper(g_logfile->Write, 3, g_logfile, &len, buf);
     /* Flush after every line — but Flush() alone is NOT enough on FAT.
        It commits data to disk clusters but does NOT update the file's
@@ -959,6 +972,15 @@ static void log_line(CHAR16 *s) {
             g_logfile = nf;
         }
     }
+}
+
+/* v0.4.52 — flush the lines buffered before the log file opened (g_early_buf). */
+static void flush_early_log(void) {
+    if (!g_logfile || g_early_len == 0) return;
+    UINTN n = g_early_len;
+    uefi_call_wrapper(g_logfile->Write, 3, g_logfile, &n, g_early_buf);
+    uefi_call_wrapper(g_logfile->Flush, 1, g_logfile);
+    g_early_len = 0;
 }
 
 /* Caller-driven flush. With per-line flush above this is redundant for
@@ -1273,9 +1295,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.48   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.52   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.48   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.52   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1285,8 +1307,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.48   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
-                 L"  MEMFORGE v0.4.48   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.52   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
+                 L"  MEMFORGE v0.4.52   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1294,16 +1316,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.48  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
-                 L"  MEMFORGE v0.4.48  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
+               T(L"  MEMFORGE v0.4.52  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
+                 L"  MEMFORGE v0.4.52  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.48 | %s | %s | прошло %02d:%02d",
-                 L" MEMFORGE v0.4.48 | %s | %s | elapsed %02d:%02d"),
+               T(L" MEMFORGE v0.4.52 | %s | %s | прошло %02d:%02d",
+                 L" MEMFORGE v0.4.52 | %s | %s | elapsed %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -1633,6 +1655,14 @@ typedef struct {
     UINT32 pkg_watt;      /* g_pkg_power_w (current sample) */
     UINT32 throttle_cnt;  /* g_throttle_total cumulative */
     UINT32 vid_mv;        /* g_pkg_vid_mv, populated in Phase 3 */
+    /* v0.4.49 — read-only re-read probe, filled by record_error at the instant
+       of the mismatch (AP-safe: pure reads, no EFI calls, no writes to the
+       memory under test) and printed later by the BSP. Tells a transient/cache
+       phantom from a value genuinely wrong in DRAM: dx_cached = immediate
+       re-read (cache); dx_flush = CLFLUSH then re-read (fresh DRAM fetch). */
+    UINT64 dx_cached;
+    UINT64 dx_flush;
+    UINT8  dx_valid;
 } err_record_t;
 static err_record_t g_err_records[MAX_ERR_RECORDS];
 static volatile UINT32 g_err_count = 0;
@@ -1690,6 +1720,19 @@ static void record_error(kernel_id_t test, UINT32 core,
     g_err_records[idx].pkg_watt     = g_pkg_power_w;
     g_err_records[idx].throttle_cnt = g_throttle_total;
     g_err_records[idx].vid_mv       = g_pkg_vid_mv;
+    /* v0.4.49 — read-only re-read probe (see err_record_t). Pure reads, safe on
+       an AP, no writes to the memory under test. Re-read the failing qword from
+       cache, then CLFLUSH and re-read to force a fresh fetch from DRAM. */
+    {
+        volatile UINT64 *q = (volatile UINT64 *)(UINTN)addr;
+        g_err_records[idx].dx_cached = *q;
+        if (g_has_clflush) {
+            __asm__ __volatile__("clflush (%0)" :: "r"(q) : "memory");
+            __asm__ __volatile__("mfence" ::: "memory");
+        }
+        g_err_records[idx].dx_flush = *q;
+        g_err_records[idx].dx_valid = 1;
+    }
 }
 
 /* ---------- Error localization helpers ----------
@@ -6045,8 +6088,15 @@ static void parse_quantai_ini(void) {
         SPrint(lb, sizeof(lb), L"[INI] opened as '%s'", found_as);
         log_line(lb);
     }
-    /* Read up to 4 KB — way more than enough for our subset. */
-    CHAR8 buf[4096];
+    /* Read up to 16 KB. The old 4 KB buffer silently TRUNCATED the file at
+       byte 4095 — and the shipped default quantai.ini is ~5.6 KB of comments,
+       so its entire [Display] section (EnableAA / Width / Height / FontScale /
+       ForceBlt) sat PAST the cut and was never parsed. Field report (RoVRy,
+       issue #3): pinned Width=1920/Height=1080 lived at byte ~5085, so the
+       resolution override never took effect and the GOP picker kept
+       auto-selecting the broken native mode. 16 KB covers the verbose default
+       with plenty of room. Static to keep it off the stack. */
+    static CHAR8 buf[16384];
     UINTN sz = sizeof(buf) - 1;
     if (EFI_ERROR(uefi_call_wrapper(f->Read, 3, f, &sz, buf))) {
         uefi_call_wrapper(f->Close, 1, f);
@@ -9351,8 +9401,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.48 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.48 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.52 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.52 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -9823,6 +9873,105 @@ static void render_summary(UINT64 total_ms) {
    Produces report.json in the FAT root alongside memforge2.log. Format matches
    what the LogAnalyzerGUI expects so AI analysis can read structured data
    without regex parsing. */
+/* v0.4.51 — per-run log saving. Successive runs (e.g. testing each stick in
+   each slot) used to overwrite memforge2.log/report.json. Now, at the end of
+   each run, we ALSO drop permanent copies named by run#, board, slot, serial
+   and verdict so every run is self-describing and nothing is lost. The live
+   memforge2.log/report.json stay as the "latest" pair (durability path
+   untouched). */
+static void fname_token(CHAR16 *out, UINTN cap, const CHAR8 *src) {
+    UINTN o = 0;
+    for (UINTN i = 0; src[i] && o + 1 < cap; i++) {
+        CHAR8 c = src[i];
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z'))
+            out[o++] = (CHAR16)c;
+    }
+    if (o == 0) out[o++] = L'x';
+    out[o] = 0;
+}
+
+/* Copy a FAT-root file to a new name (CREATE, overwriting any prior). Best
+   effort: any failure leaves the source intact. */
+static void fs_copy_file(CHAR16 *src, CHAR16 *dst) {
+    if (!g_logroot) return;
+    EFI_FILE_PROTOCOL *s = NULL, *d = NULL, *old = NULL;
+    if (uefi_call_wrapper(g_logroot->Open, 5, g_logroot, &s, src,
+            EFI_FILE_MODE_READ, 0) != EFI_SUCCESS || !s) return;
+    if (uefi_call_wrapper(g_logroot->Open, 5, g_logroot, &old, dst,
+            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && old)
+        uefi_call_wrapper(old->Delete, 1, old);
+    if (uefi_call_wrapper(g_logroot->Open, 5, g_logroot, &d, dst,
+            EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0)
+            != EFI_SUCCESS || !d) {
+        uefi_call_wrapper(s->Close, 1, s); return;
+    }
+    UINT8 cbuf[4096];
+    for (;;) {
+        UINTN n = sizeof(cbuf);
+        if (uefi_call_wrapper(s->Read, 4, s, &n, cbuf) != EFI_SUCCESS) break;
+        if (n == 0) break;
+        UINTN w = n;
+        uefi_call_wrapper(d->Write, 3, d, &w, cbuf);
+    }
+    uefi_call_wrapper(d->Flush, 1, d);
+    uefi_call_wrapper(d->Close, 1, d);
+    uefi_call_wrapper(s->Close, 1, s);
+}
+
+/* Build "mf_run<N>_<model>_<slot>_<serial>_<verdict>" (no extension). */
+static void build_run_basename(CHAR16 *out, UINTN cap_chars) {
+    CHAR16 model[24];
+    fname_token(model, 24, g_sys_model);
+    UINT32 run_seq = g_hist_prev_valid ? (g_hist_prev.run_seq + 1) : 1;
+    int di = (g_run_total_errors > 0) ? dominant_dimm_idx() : -1;
+    if (di < 0 && g_dimm_count == 1) di = 0;
+    CHAR16 slot[24]; CHAR8 ser[12];
+    if (di >= 0 && di < (int)g_dimm_count) {
+        fname_token(slot, 24, g_dimms[di].locator);
+        UINT8 *sn = g_dimms[di].spd_serial;
+        static const CHAR8 hx[] = "0123456789ABCDEF";
+        ser[0]=hx[(sn[0]>>4)&0xF]; ser[1]=hx[sn[0]&0xF];
+        ser[2]=hx[(sn[1]>>4)&0xF]; ser[3]=hx[sn[1]&0xF];
+        ser[4]=hx[(sn[2]>>4)&0xF]; ser[5]=hx[sn[2]&0xF];
+        ser[6]=hx[(sn[3]>>4)&0xF]; ser[7]=hx[sn[3]&0xF]; ser[8]=0;
+    } else {
+        slot[0]=L'a'; slot[1]=L'l'; slot[2]=L'l'; slot[3]=0;
+        ser[0]='x'; ser[1]=0;
+    }
+    verdict_kind_t v = compute_verdict_kind();
+    CHAR16 *vs = (v == VERDICT_FAIL) ? L"FAIL"
+               : (v == VERDICT_WARN) ? L"WARN" : L"PASS";
+    SPrint(out, cap_chars * sizeof(CHAR16),
+           L"mf_run%d_%s_%s_%a_%s", run_seq, model, slot, ser, vs);
+}
+
+/* Save permanent uniquely-named copies of this run's log + report. */
+static void save_named_run_copies(void) {
+    if (!g_logroot) return;
+    CHAR16 base[100], name[120];
+    build_run_basename(base, 100);
+    /* Close the live log so the copy reads a complete file, then reopen at end
+       so any later lines still land in memforge2.log. */
+    UINT64 pos = 0;
+    if (g_logfile) {
+        uefi_call_wrapper(g_logfile->Flush, 1, g_logfile);
+        uefi_call_wrapper(g_logfile->GetPosition, 2, g_logfile, &pos);
+        uefi_call_wrapper(g_logfile->Close, 1, g_logfile);
+        g_logfile = NULL;
+    }
+    SPrint(name, sizeof(name), L"%s.log", base);
+    fs_copy_file(L"memforge2.log", name);
+    SPrint(name, sizeof(name), L"%s.json", base);
+    fs_copy_file(L"report.json", name);
+    EFI_FILE_PROTOCOL *nf = NULL;
+    if (uefi_call_wrapper(g_logroot->Open, 5, g_logroot, &nf, L"memforge2.log",
+            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && nf) {
+        uefi_call_wrapper(nf->SetPosition, 2, nf, pos);
+        g_logfile = nf;
+    }
+}
+
 static void json_write_chunk(EFI_FILE_PROTOCOL *jf, CHAR16 *buf16) {
     CHAR8 line[600];
     UINTN k = 0;
@@ -11393,8 +11542,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.48 init ===");
+    log_line(L"=== MemForge2 v0.4.52 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
+    flush_early_log();   /* v0.4.52 — emit lines buffered before the log opened */
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
        firmware boot logo just hangs there for several seconds on slow PCs
@@ -12281,6 +12431,13 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                            r->throttle_cnt);
                 }
                 log_line(lb);
+                /* v0.4.49 — false-error diagnostic probe results. */
+                if (r->dx_valid) {
+                    SPrint(lb, sizeof(lb),
+                           L"[ERR]   probe: reread=0x%lx  flush-reread=0x%lx (exp=0x%lx)",
+                           r->dx_cached, r->dx_flush, r->expected);
+                    log_line(lb);
+                }
             }
             /* Aggregate analysis: stuck bit + 1-GB histogram + DIMM tally + row/bank. */
             UINT32 srow_n = 0;
@@ -12347,6 +12504,14 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 
         log_line(L"[STEP 6] Writing report.json");
         write_json_report(total_ms);
+        {
+            CHAR16 bn[100], lb6[160];
+            build_run_basename(bn, 100);
+            SPrint(lb6, sizeof(lb6),
+                   L"[STEP 6] Saved named copies: %s.log / .json", bn);
+            log_line(lb6);
+        }
+        save_named_run_copies();
 
         /* Wait for user decision. Only EXPLICIT keys do something — random
            accidental presses must NOT cycle into "rerun tests". Earlier

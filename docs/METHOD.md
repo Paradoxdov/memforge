@@ -63,9 +63,11 @@ static UINT64 probe_pair_lat(volatile UINT64 *a, volatile UINT64 *b) {
 ```
 
 A calibration pass (`timing_probe_calibrate`) histograms 4000 random pairs and
-requires a **clean bimodal gap** (fast cluster vs slow cluster). No gap → the
-channel is too noisy on this platform and the method bails out. This is the
-first go/no-go gate.
+requires a **clean bimodal gap** (fast cluster vs slow cluster). On the Haswell
+reference board the fast cluster sat around ~233 cyc and the slow (row-conflict)
+cluster around ~390 cyc, with an empty band between them — a textbook gap. No
+gap → the channel is too noisy on this platform and the method bails out. This
+is the first go/no-go gate.
 
 ---
 
@@ -87,6 +89,7 @@ for (int i = 0; i < FN_POOL; i++) {
     if (r >= nr) r = nr - 1;
     UINT64 a = regs[r] + (pg - acc) * 4096ULL + ((rng >> 20) & (4096ULL - 64ULL));
     g_fn_pool[i] = a & ~63ULL;                             /* cache-line aligned */
+    g_fn_setid[i] = 0xFF;                                  /* 0xFF = ungrouped */
 }
 ```
 
@@ -162,7 +165,10 @@ a table of published candidates.
 We keep a table of published `(channel-hash, DIMM-in-channel-bit)` pairs and
 accept the **first row whose both functions actually validate** on the live
 silicon. A row that doesn't fit the platform simply fails `fn_is_addr_func` and
-is skipped — so a wrong row can never mis-attribute; it just doesn't apply:
+is skipped — so a wrong row can never select the wrong **addressing function**.
+(This guard is at the function level only. The function-value → physical-slot
+step in §7 still *assumes* the standard SMBus layout, so "never" applies to the
+math, not blindly to the whole chain — see the limitation in §10.)
 
 ```c
 static const struct { const CHAR16 *nm; UINT64 ch; int dbit; } g_addr_maps[] = {
@@ -220,15 +226,29 @@ nibble.)
 ## 8. Validation methodology (the method is not "proven" without this)
 
 1. **Ground truth, one stick at a time.** With `TestOnlyDimm` forcing the buffer
-   into a single DIMM's range, test each module alone. On the reference kit only
-   one serial failed; the other three passed. That is the independent truth.
-2. **Decoder anchor.** A real error address decoded to `(channel 1, DIMM 1)` =
-   SPD `0x53` = the serial of the **same** module ground truth had flagged.
-3. **"It's the RAM, not the test" control.** The same machine with a different
-   (good) kit passed the identical tests with zero errors — same binary, same
-   board. So the errors track the memory, not a code artifact.
+   into a single DIMM's range, test each module alone. On the reference kit
+   (4× Samsung DDR3 on an OptiPlex 7020/9020) exactly one serial failed —
+   `214649E0` — and the other three (`173B6958`, `17A31121`, `16A0656B`) passed.
+   That is the independent truth, established without any address decode.
+2. **Decoder anchor — concrete.** A real recorded error sat at physical address
+   `0x4803C080`. Decode it with the confirmed map:
+   - channel = parity of bits {7,8,9,12,13,18,19} of the address = **1**
+   - DIMM-in-channel = a16 = **1**
+   - SPD slot = `0x50 + 2·channel + DIMM` = `0x50 + 2 + 1` = **`0x53`**
+   - the SPD serial read at `0x53` = **`214649E0`** — the exact module step 1 had
+     flagged. The decode and the independent ground truth agree.
+3. **"It's the RAM, not the test" — two controls.**
+   - *Different kit:* the same machine with a different (good) kit passed the
+     identical tests with zero errors — same binary, same board. The errors
+     track the memory, not the code.
+   - *Different write path:* re-filling the same buffer with plain **scalar**
+     64-bit stores produced the same byte-lane mismatches as the AVX2 fill
+     (`AVX2 mismatches ≈ scalar mismatches`). So the corruption is a real memory
+     fault, **not an artifact of the AVX2 instruction** — a separate proof from
+     the kit-swap above.
 4. **It follows the stick, not the address.** Moving the faulty module to another
-   slot makes the verdict name the new slot **and the same serial**.
+   slot makes the verdict name the new slot **and the same serial** (validated
+   `DIMM2 → DIMM4`, serial unchanged).
 
 ---
 
@@ -267,6 +287,30 @@ To add one:
 When the address map is not confirmed, the tool reverts to its previous,
 honest behaviour — it just doesn't pin the exact slot. Fallback is never wrong,
 only less precise.
+
+---
+
+## 11. Field notes (hard-won, read before you trust a verdict)
+
+These cost real debugging time; they are part of the method, not trivia.
+
+- **"A scalar write-back fixes the byte" is a *measurement* question first, not
+  proof of a dead cell.** The same symptom can be a transient or a read-side
+  artifact. Here it turned out to be a genuinely bad byte-lane — but that was
+  only established by the controls in §8 (good-kit swap + scalar-vs-AVX2), not
+  by the symptom alone. Don't shortcut to "bad cell".
+- **Don't conclude a bad socket / bad lane / hardware fault from logs alone.**
+  Always cross-check against single-stick ground truth (§8.1). On consumer
+  dual-channel, SMBIOS Type-20 will confidently point at the wrong slot, and
+  the "always DIMM3" symptom is a *mapping* artifact, not a socket fault.
+- **The probe must span all of RAM.** An early version sampled one 4 GB block
+  and only ever found the bank bits — the channel/DIMM functions were invisible.
+  Span everything (§3) or the recovery silently under-reports.
+- **The channel function is a multi-bit XOR.** A 1–2-bit brute force will not
+  find it. That is why the candidate table (§6) exists.
+- **Reproduce the anchor (§8.2) before claiming a new platform works.** Matching
+  the decode to independent ground truth is the only thing that turns "looks
+  right" into "is right".
 
 ---
 

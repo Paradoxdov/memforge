@@ -152,6 +152,9 @@ hangs) take priority over feature requests. Thanks for your patience.
 
   Fallback is never wrong, just less precise; new platforms are added as one
   table row once validated against a known-bad module on that hardware.
+
+  Full write-up of the method (timing primitive, the self-validating address-map
+  table, the decode, and the validation protocol): **[docs/METHOD.md](docs/METHOD.md)**.
 - **Auto-isolation** — when the post-test verdict finds errors spread
   across multiple DIMM address ranges, the program automatically re-runs
   the failing kernel against each affected stick in turn (constraining
@@ -265,6 +268,7 @@ distribution, and private use; provided as-is, no warranty.
 ## Acknowledgements
 
 - Frigo, Giuffrida, Bos, Razavi — TRRespass attack (USENIX Sec 2020)
+- Pessl, Gruss, Maurice, Schwarz, Mangard — DRAMA address-mapping recovery (USENIX Sec 2016); basis for the timing-based bad-stick attribution ([docs/METHOD.md](docs/METHOD.md))
 - A. J. van de Goor — March-C- algorithm (1997)
 - Linux Foundation — `PreLoader.efi` / `HashTool.efi` Secure Boot shims
 - gnu-efi project — UEFI headers and library

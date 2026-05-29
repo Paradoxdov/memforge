@@ -1,6 +1,6 @@
 # MemForge2
 
-**Latest release: [v0.4.52](https://github.com/Paradoxdov/memforge/releases/latest)** — download `MemForge2.efi`, copy to `EFI/BOOT/loader.efi` on a FAT32 USB.
+**Latest release: [v0.4.64](https://github.com/Paradoxdov/memforge/releases/latest)** — download `MemForge2.efi`, copy to `EFI/BOOT/loader.efi` on a FAT32 USB.
 
 UEFI memory diagnostic tool for shop / repair use. Boots from USB before any
 OS loads, runs 14 stress and pattern tests in parallel on every CPU core,
@@ -130,6 +130,16 @@ hangs) take priority over feature requests. Thanks for your patience.
   which of a pair is at fault, the program automatically re-tests each
   DIMM in isolation (~5 min) and produces a definitive `REPLACE X`
   answer — no manual swapping required on most consumer desktops.
+
+  **New in v0.4.61+ — hardware-timing address decode (Haswell DDR3)**: on
+  Intel client platforms where channel interleave defeats SMBIOS Type 20,
+  the program recovers the DRAM address-mapping functions directly from a
+  row-conflict timing side-channel (à la Pessl et al. "DRAMA"), confirms
+  them against the published Haswell map, and attributes each error to the
+  exact (channel, DIMM) = SPD slot. The verdict then names the faulty stick
+  by its SPD serial number — and follows it correctly even when the stick is
+  moved to a different slot. Validated against a known-bad module across
+  slot swaps on OptiPlex 9020/7020.
 - **Auto-isolation** — when the post-test verdict finds errors spread
   across multiple DIMM address ranges, the program automatically re-runs
   the failing kernel against each affected stick in turn (constraining
@@ -212,7 +222,7 @@ EnableAVX=1
 ;WatchdogSeconds=120 ; auto-reboot if a core wedges mid-test; 0 = off
 
 [Meta]
-Version=0.4.52
+Version=0.4.64
 Language=en         ; "ru" or "en"
 
 [Display]

@@ -1,5 +1,5 @@
 /*
- * MemForge2 v0.4.47 — UEFI memory tester written from scratch.
+ * MemForge2 v0.4.48 — UEFI memory tester written from scratch.
  *
  * Latest release: https://github.com/Paradoxdov/memforge/releases
  * For per-version changes see git log / GitHub Releases page.
@@ -885,7 +885,7 @@ static void init_splash(CHAR16 *stage) {
     cls();
     UINTN cy = g_h / 2;
     /* Title — large centered line. */
-    CHAR16 *title = L"MEMFORGE v0.4.47";
+    CHAR16 *title = L"MEMFORGE v0.4.48";
     UINTN tx = (g_w - StrLen(title) * g_char_w) / 2;
     gfx_draw_str_color(tx, cy - g_char_h * 2, title, COL_ACCENT_HI);
     /* Stage indicator — what we're doing right now. */
@@ -1273,9 +1273,9 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
     UINTN cols = g_text_cols;
     if (cols >= 110) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.47   |   %ld.%ld ГБ RAM   |   %s   "
+               T(L"  MEMFORGE v0.4.48   |   %ld.%ld ГБ RAM   |   %s   "
                  L"|   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d   |   Тесты %d/%d",
-                 L"  MEMFORGE v0.4.47   |   %ld.%ld GB RAM   |   %s   "
+                 L"  MEMFORGE v0.4.48   |   %ld.%ld GB RAM   |   %s   "
                  L"|   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d   |   Tests %d/%d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
@@ -1285,8 +1285,8 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                (UINT32)done, (UINT32)total);
     } else if (cols >= 90) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.47   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
-                 L"  MEMFORGE v0.4.47   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
+               T(L"  MEMFORGE v0.4.48   |   %ld.%ld ГБ RAM   |   %s   |   %s   |   прошло %02d:%02d   |   осталось ~%02d:%02d",
+                 L"  MEMFORGE v0.4.48   |   %ld.%ld GB RAM   |   %s   |   %s   |   elapsed %02d:%02d   |   ETA ~%02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
@@ -1294,16 +1294,16 @@ static void render_header(UINT64 elapsed_ms, UINTN done, UINTN total) {
                eta_secs / 60, eta_secs % 60);
     } else if (cols >= 70) {
         SPrint(buf, sizeof(buf),
-               T(L"  MEMFORGE v0.4.47  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
-                 L"  MEMFORGE v0.4.47  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
+               T(L"  MEMFORGE v0.4.48  |  %ld.%ld ГБ RAM  |  %s  |  %s  |  прошло %02d:%02d",
+                 L"  MEMFORGE v0.4.48  |  %ld.%ld GB RAM  |  %s  |  %s  |  elapsed %02d:%02d"),
                ram_gb_x10 / 10, ram_gb_x10 % 10,
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
     } else {
         SPrint(buf, sizeof(buf),
-               T(L" MEMFORGE v0.4.47 | %s | %s | прошло %02d:%02d",
-                 L" MEMFORGE v0.4.47 | %s | %s | elapsed %02d:%02d"),
+               T(L" MEMFORGE v0.4.48 | %s | %s | прошло %02d:%02d",
+                 L" MEMFORGE v0.4.48 | %s | %s | elapsed %02d:%02d"),
                pass_tag,
                err_tag,
                secs / 60, secs % 60);
@@ -9351,8 +9351,8 @@ static void render_summary(UINT64 total_ms) {
     UINTN hrow = (g_hdr_h / 2 - g_char_h / 2) / g_char_h;
     CHAR16 buf[200];
     SPrint(buf, sizeof(buf),
-           T(L"  MEMFORGE v0.4.47 ИТОГИ   |   %d сек   |   Ядра %d/%d",
-             L"  MEMFORGE v0.4.47 SUMMARY   |   %d sec   |   Cores %d/%d"),
+           T(L"  MEMFORGE v0.4.48 ИТОГИ   |   %d сек   |   Ядра %d/%d",
+             L"  MEMFORGE v0.4.48 SUMMARY   |   %d sec   |   Cores %d/%d"),
            (UINT32)(total_ms / 1000),
            (UINT32)g_n_enabled, (UINT32)g_n_cores);
     say_at_rc(0, hrow, buf);
@@ -11037,6 +11037,11 @@ static int main_menu_wait(void) {
    missed. Idempotent — safe to call multiple times. */
 static void recheck_fb_dimensions(void) {
     if (!g_gop) return;
+    /* v0.4.48 — if the user pinned a resolution in quantai.ini, the picker
+       already honored it even when firmware misreports FrameBufferSize on
+       AMD GOP. Don't let this late recheck downgrade it back to the small
+       boot mode. */
+    if (g_cfg_force_w && g_cfg_force_h) return;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = g_gop->Mode->Info;
     UINT32 ppsl = info->PixelsPerScanLine;
     UINT64 fbsz = g_gop->Mode->FrameBufferSize;
@@ -11187,6 +11192,12 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                     log_line(lb);
                     continue;
                 }
+                /* v0.4.48 — AMD/RDNA3 GOP updates Mode->Info and
+                   FrameBufferSize lazily; reading them in the same tick as
+                   SetMode can return stale values. Field report (RoVRy, MSI
+                   MS-7D75 + RX 7900 + Ryzen 9 7900X): give firmware ~50 ms
+                   to settle before we verify the switch actually took. */
+                uefi_call_wrapper(BS->Stall, 1, (UINTN)50000);
             }
             /* Force a tiny Blt — some Intel iGPU firmwares leave Mode->Info
                stale until the first real Blt happens. */
@@ -11194,6 +11205,23 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 EFI_GRAPHICS_OUTPUT_BLT_PIXEL kick = {0, 0, 0, 0};
                 uefi_call_wrapper(g_gop->Blt, 10, g_gop, &kick, EfiBltVideoFill,
                                   0, 0, 0, 0, 1, 1, 0);
+            }
+            /* v0.4.48 — dump what firmware reports AFTER the switch + settle,
+               so the log shows BOTH signals at once: the live Mode->Info
+               resolution/ppsl AND FrameBufferSize. When they disagree (Info
+               says big, fb says small) firmware is lying about one of them and
+               only the physical screen can say which is real. */
+            {
+                EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *li = g_gop->Mode->Info;
+                CHAR16 lbd[210];
+                SPrint(lbd, sizeof(lbd),
+                       L"[GFX] mode[%d] post-set: want %dx%d | live Info %dx%d ppsl=%d fbsz=%ld",
+                       m, want_w, want_h,
+                       li ? li->HorizontalResolution : 0,
+                       li ? li->VerticalResolution : 0,
+                       li ? li->PixelsPerScanLine : 0,
+                       (UINT64)g_gop->Mode->FrameBufferSize);
+                log_line(lbd);
             }
             /* v0.4.47 — verify against THIS mode's OWN required framebuffer
                bytes, using the per-mode ppsl from QueryMode. Do NOT read
@@ -11205,6 +11233,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                mode is genuinely active only if the buffer can hold it. */
             UINT64 got_fbsz   = g_gop->Mode->FrameBufferSize;
             UINT64 need_bytes = (UINT64)want_ppsl * (UINT64)want_h * 4ULL;
+            /* v0.4.48 — did the user PIN this exact resolution via
+               [Display] Width/Height in quantai.ini? If so we trust their
+               explicit choice below even when fbsz looks too small. */
+            int forced_match = (g_cfg_force_w && g_cfg_force_h &&
+                                want_w == g_cfg_force_w && want_h == g_cfg_force_h);
             if (got_fbsz == 0) {
                 /* Firmware doesn't report size — can't verify, accept. */
                 CHAR16 lb[160];
@@ -11220,6 +11253,27 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
                 /* Framebuffer big enough → mode really activated. */
                 active_w = want_w; active_h = want_h;
                 active_ppsl = want_ppsl; active_fbsz = got_fbsz;
+                break;
+            }
+            /* v0.4.48 — fbsz says too small, but on AMD GOP FrameBufferSize
+               can stay stale at the OLD allocation even after a REAL switch
+               (RoVRy field report). The strict fbsz test is right for the
+               AUTO-pick of the largest mode (it protects against MSI firmware
+               that FAKES a big switch and keeps a small buffer). But when the
+               user has explicitly pinned THIS resolution in quantai.ini, we
+               must not reject it and fall back to a lying mode — that just
+               recreates the broken display they were fixing. Trust the
+               override; if firmware really faked it the user picks another
+               value, which still beats auto-garbage. */
+            if (forced_match) {
+                CHAR16 lbf[210];
+                SPrint(lbf, sizeof(lbf),
+                       L"[GFX] mode[%d] %dx%d: fb only %ld bytes (<%ld) but "
+                       L"resolution pinned in quantai.ini — trusting override",
+                       m, want_w, want_h, got_fbsz, need_bytes);
+                log_line(lbf);
+                active_w = want_w; active_h = want_h;
+                active_ppsl = want_ppsl; active_fbsz = need_bytes;
                 break;
             }
             /* Firmware kept a smaller allocation than this mode needs →
@@ -11339,7 +11393,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
         }
     }
 
-    log_line(L"=== MemForge2 v0.4.47 init ===");
+    log_line(L"=== MemForge2 v0.4.48 init ===");
     log_line(L"[WATCHDOG] UEFI 5-min watchdog disabled at app entry");
     /* Show splash IMMEDIATELY so the user sees the program is alive while
        INI parsing, SMBus probes and SMBIOS walk happen. Without this, the
